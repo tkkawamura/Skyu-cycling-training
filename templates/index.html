@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cycling Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Personal Cycling Dashboard</p>
+          <h1>Ride Review</h1>
+        </div>
+        <button id="refresh" class="icon-button" title="Refresh">R</button>
+      </section>
+
+      <section id="warning" class="warning hidden"></section>
+
+      <section class="summary-grid">
+        <article class="metric"><span>Fitness</span><strong id="fitness">-</strong></article>
+        <article class="metric"><span>Fatigue</span><strong id="fatigue">-</strong></article>
+        <article class="metric"><span>Form</span><strong id="form">-</strong></article>
+        <article class="metric"><span>Weight</span><strong id="weight">-</strong></article>
+        <article class="metric"><span>FTP</span><strong id="ftp">-</strong></article>
+        <article class="metric"><span>eFTP</span><strong id="eftp">-</strong></article>
+      </section>
+
+      <section class="content-grid">
+        <article class="panel ride-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Latest Ride</p>
+              <h2 id="ride-name">Loading...</h2>
+            </div>
+            <span id="ride-date" class="badge">-</span>
+          </div>
+          <div class="ride-stats">
+            <div><span>Load</span><strong id="ride-load">-</strong></div>
+            <div><span>Time</span><strong id="ride-time">-</strong></div>
+            <div><span>Power</span><strong id="ride-power">-</strong></div>
+            <div><span>HR</span><strong id="ride-hr">-</strong></div>
+          </div>
+          <label class="rpe-control">
+            <span>RPE</span>
+            <input id="rpe" type="range" min="1" max="10" step="1">
+            <output id="rpe-value">Not set</output>
+          </label>
+          <button id="save-rpe" class="primary-button">Save RPE and re-analyze</button>
+        </article>
+
+        <article class="panel coach-panel">
+          <div class="score-ring">
+            <span id="score">-</span>
+          </div>
+          <div class="assessment">
+            <p class="eyebrow">ChatGPT Coach</p>
+            <h2 id="headline">Generating review...</h2>
+            <dl>
+              <dt>Good</dt>
+              <dd id="good">-</dd>
+              <dt>Concern</dt>
+              <dd id="concern">-</dd>
+              <dt>Next action</dt>
+              <dd id="next-action">-</dd>
+              <dt>Tomorrow</dt>
+              <dd id="tomorrow">-</dd>
+            </dl>
+            <p id="note" class="note"></p>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel trend-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">21 Day Trend</p>
+            <h2>Condition Trend</h2>
+          </div>
+          <span id="source" class="badge">-</span>
+        </div>
+        <svg id="trend-chart" role="img" aria-label="Fitness Fatigue Form trend"></svg>
+        <div class="legend">
+          <span class="fitness-dot"></span>Fitness
+          <span class="fatigue-dot"></span>Fatigue
+          <span class="form-dot"></span>Form
+        </div>
+      </section>
+
+      <section class="panel fit-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">FIT Import</p>
+            <h2>FIT Activity Context</h2>
+          </div>
+          <span id="fit-status" class="badge">Not imported</span>
+        </div>
+        <form id="fit-form" class="fit-form">
+          <input id="fit-file" type="file" accept=".fit">
+          <button class="primary-button" type="submit">Analyze FIT</button>
+        </form>
+        <pre id="fit-output" class="json-preview"></pre>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
