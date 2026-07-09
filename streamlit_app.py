@@ -606,8 +606,11 @@ def sanitize_latest_ride(ride: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def secret_or_env(name: str, default: Any = None) -> Any:
-    if name in st.secrets:
-        return st.secrets[name]
+    try:
+        if name in st.secrets:
+            return st.secrets[name]
+    except FileNotFoundError:
+        pass
     return os.getenv(name, default)
 
 
