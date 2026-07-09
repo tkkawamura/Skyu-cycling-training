@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import gzip
 import tempfile
 from html import escape
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -42,7 +44,7 @@ def main() -> None:
     subjective_note = st.text_area("メモ", value="", placeholder="睡眠、疲労感、補給、脚の感覚など")
 
     uploaded_file = None
-    uploaded_file = st.file_uploader("FITファイルまたは生成済みJSON（自動取得できない場合のみ）", type=["fit", "json"])
+    uploaded_file = st.file_uploader("FITファイルまたは生成済みJSON（自動取得できない場合のみ）")
 
     if st.button("ChatGPT貼り付け用テキストを生成", type="primary", use_container_width=True):
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
@@ -67,8 +69,9 @@ def main() -> None:
 
 
 def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
-    today = date.today()
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
     oldest = today - timedelta(days=lookback_days)
+    newest = today + timedelta(days=1)
     data_dir = "data"
     intervals_client = IntervalsClient(
         IntervalsConfig(
@@ -81,7 +84,7 @@ def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
     )
     warnings = []
     try:
-        payload = intervals_client.collect_dashboard(oldest=oldest, newest=today)
+        payload = intervals_client.collect_dashboard(oldest=oldest, newest=newest)
         source = "intervals"
     except IntervalsError as exc:
         payload = intervals_client.sample_dashboard(oldest=oldest, newest=today)
@@ -202,7 +205,10 @@ def generate_context(
 
 def analyze_uploaded_fit(builder: FitActivityContextBuilder, uploaded_fit: Any) -> dict[str, Any]:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".fit") as tmp:
-        tmp.write(uploaded_fit.getbuffer())
+        content = uploaded_fit.getbuffer()
+        if str(uploaded_fit.name).lower().endswith(".gz"):
+            content = gzip.decompress(bytes(content))
+        tmp.write(content)
         path = tmp.name
     try:
         return builder.build(path)
@@ -239,7 +245,11 @@ def build_review_summary(
             "fitness": metrics.get("fitness"),
             "fatigue": metrics.get("fatigue"),
             "form": metrics.get("form"),
+            "pre_ride_ctl": metrics.get("pre_ride_ctl"),
             "weight": metrics.get("weight"),
+            "resting_heart_rate": metrics.get("resting_heart_rate"),
+            "sleep_score": metrics.get("sleep_score"),
+            "hrv": metrics.get("hrv"),
             "ftp": metrics.get("ftp"),
             "max_heart_rate": metrics.get("max_heart_rate"),
             "training_load": metrics.get("training_load"),
@@ -292,7 +302,11 @@ def render_metrics(metrics: dict[str, Any]) -> None:
         ("フィットネス", display(metrics.get("fitness"))),
         ("ファティーグ", display(metrics.get("fatigue"))),
         ("フォーム", display(metrics.get("form"))),
+        ("ライド前CTL", display(metrics.get("pre_ride_ctl"))),
         ("体重", display(metrics.get("weight"), "kg")),
+        ("安静時心拍", display(metrics.get("resting_heart_rate"), "bpm")),
+        ("睡眠スコア", display(metrics.get("sleep_score"))),
+        ("HRV", display(metrics.get("hrv"), "ms")),
         ("FTP", display(metrics.get("ftp"), "W")),
         ("最大心拍", display(metrics.get("max_heart_rate"), "bpm")),
     ]
@@ -323,7 +337,7 @@ def inject_styles() -> None:
         }
         .metric-grid {
             display: grid;
-            grid-template-columns: repeat(7, minmax(0, 1fr));
+            grid-template-columns: repeat(5, minmax(0, 1fr));
             gap: 0.65rem;
             margin: 0.4rem 0 1.15rem;
         }
@@ -517,11 +531,11 @@ def build_chatgpt_prompt() -> str:
         "あなたは持久系パフォーマンスコーチです。\n"
         "このJSON内のFIT解析情報を主な根拠に、アスリート本人向けの日本語レビューを作成してください。\n"
         "このアプリのJSONでは、FIT解析JSONは `fit_activity_context` に格納されています。\n"
-        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、体重、FTP、最大心拍数は、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
+        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、ライド前CTL、体重、安静時心拍、睡眠スコア、HRV、FTP、最大心拍数は、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
         "`manual_inputs` にRPEやメモがあれば、本人の主観情報として使ってください。\n\n"
         "共通の読み取りルール:\n"
         "- このJSONだけを根拠にし、JSON内にない事実は推測で補わないでください。\n"
-        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / weight / FTP / max_heart_rate を確認し、コンディション前提を把握してください。\n"
+        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / pre_ride_ctl / weight / resting_heart_rate / sleep_score / hrv / FTP / max_heart_rate を確認し、コンディション前提を把握してください。\n"
         "- まず `fit_activity_context.llm_summary.metric_presence`, `fit_activity_context.llm_summary.data_presence_matrix`, `fit_activity_context.llm_summary.available_metrics` を確認し、評価に使える指標を確定してください。\n"
         "- 詳細値の真値は `fit_activity_context.activity`, `fit_activity_context.physiology`, `fit_activity_context.signals`, `fit_activity_context.segments` にあります。`llm_summary` は索引・要約として使ってください。\n"
         "- 主要work intervalは `fit_activity_context.segments.auto_interval_segments`、user/device lapは `fit_activity_context.segments.user_lap_segments` を確認してください。\n"
