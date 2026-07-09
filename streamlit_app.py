@@ -123,6 +123,7 @@ def generate_context(
         "trend": intervals_payload.get("trend"),
         "recent_activities": intervals_payload.get("recent_activities"),
         "fit_auto_downloaded": bool(fit_path),
+        "fit_auto_download": intervals_payload.get("fit_download_info"),
         "fit_analysis_source": fit_source,
     }
     output = {

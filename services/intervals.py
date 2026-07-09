@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import io
 import os
 from dataclasses import dataclass
@@ -49,11 +50,12 @@ class IntervalsClient:
 
         activity_detail = None
         fit_path = None
+        fit_download_info = None
         if latest_ride and latest_ride.get("id"):
             activity_detail = self.get_activity_detail(str(latest_ride["id"]))
             latest_ride = {**latest_ride, **self._summarize_activity_detail(activity_detail)}
             if self.config.download_fit:
-                fit_path = self.download_fit(str(latest_ride["id"]), latest_ride.get("date"))
+                fit_path, fit_download_info = self.download_fit(latest_ride, activity_detail)
 
         metrics = self._latest_metrics(wellness, activities, latest_ride)
         trend = self._build_trend(wellness, activities)
@@ -63,6 +65,7 @@ class IntervalsClient:
             "latest_ride": latest_ride,
             "activity_detail_available": bool(activity_detail),
             "fit_path": fit_path,
+            "fit_download_info": fit_download_info,
             "trend": trend,
             "recent_activities": activities[:12],
         }
@@ -99,25 +102,78 @@ class IntervalsClient:
         except IntervalsError:
             return None
 
-    def download_fit(self, activity_id: str, ride_date: str | None) -> str | None:
+    def download_fit(self, activity: dict[str, Any], detail: dict[str, Any] | None = None) -> tuple[str | None, dict[str, Any]]:
+        activity_id = str(activity.get("id") or "")
+        ride_date = activity.get("date")
         target = self.fit_dir / f"{ride_date or 'activity'}-{activity_id}.fit"
         if target.exists() and target.stat().st_size > 0:
-            return str(target)
+            return str(target), {"source": "cache", "path": str(target)}
 
-        paths = [
-            f"/api/v1/activity/{activity_id}/download.fit",
-            f"/api/v1/activity/{activity_id}/download",
-            f"/api/v1/activity/{activity_id}/file.fit",
-        ]
+        paths = self._fit_download_paths(activity, detail)
+        attempted = []
         for path in paths:
             try:
-                response = self._request("GET", path, params={"format": "fit"})
-                content_type = response.headers.get("content-type", "")
-                if response.content and ("json" not in content_type.lower()):
-                    target.write_bytes(response.content)
-                    return str(target)
-            except IntervalsError:
+                attempted.append(path)
+                response = self._request("GET", path, params={"format": "fit", "original": "true"})
+                content = self._extract_fit_bytes(response)
+                if content:
+                    target.write_bytes(content)
+                    return str(target), {"source": "intervals_auto_download", "path": path, "attempted": attempted}
+            except IntervalsError as exc:
+                attempted.append(f"{path} -> {exc}")
                 continue
+        return None, {"source": "not_found", "attempted": attempted}
+
+    def _fit_download_paths(self, activity: dict[str, Any], detail: dict[str, Any] | None) -> list[str]:
+        ids = []
+        for key in ("id", "activity_id", "external_id"):
+            value = activity.get(key)
+            if value:
+                ids.append(str(value))
+        if detail:
+            for key in ("id", "activity_id", "external_id", "file_id", "filename"):
+                value = detail.get(key)
+                if value:
+                    ids.append(str(value))
+        ids = list(dict.fromkeys(ids))
+
+        direct_paths = []
+        for data in (activity, detail or {}):
+            direct_paths.extend(find_fit_paths(data))
+
+        suffixes = [
+            "original.fit",
+            "original",
+            "original-file",
+            "fit-file",
+            "file.fit",
+            "file",
+            "download.fit",
+            "download",
+            "export.fit",
+        ]
+        generated = []
+        for activity_id in ids:
+            for root in ("/api/v1/activity", "/api/activity", "/api/activities"):
+                generated.extend(f"{root}/{activity_id}/{suffix}" for suffix in suffixes)
+            generated.extend(
+                [
+                    f"/api/v1/activity/{activity_id}.fit",
+                    f"/api/activity/{activity_id}.fit",
+                    f"/api/activities/{activity_id}.fit",
+                ]
+            )
+        return list(dict.fromkeys(direct_paths + generated))
+
+    def _extract_fit_bytes(self, response: requests.Response) -> bytes | None:
+        content_type = response.headers.get("content-type", "").lower()
+        content = response.content or b""
+        if not content or "json" in content_type or content.lstrip().startswith((b"{", b"[")):
+            return None
+        if content.startswith(b"\x1f\x8b"):
+            content = gzip.decompress(content)
+        if is_fit_file(content):
+            return content
         return None
 
     def sample_dashboard(self, oldest: date, newest: date) -> dict[str, Any]:
@@ -191,6 +247,7 @@ class IntervalsClient:
             date_value = str(date_value).split("T")[0]
         return {
             "id": first_value(item, "id", "activity_id", "Activity ID"),
+            "external_id": first_value(item, "external_id", "External ID", "strava_id", "garmin_id"),
             "date": date_value,
             "name": first_value(item, "name", "Name", "filename") or "Ride",
             "type": first_value(item, "type", "sport", "Type") or "Ride",
@@ -219,6 +276,7 @@ class IntervalsClient:
             "average_heartrate": number(first_value(detail, "average_heartrate")),
             "decoupling": number(first_value(detail, "decoupling", "icu_decoupling")),
             "interval_count": len(detail.get("icu_intervals") or []),
+            "external_id": first_value(detail, "external_id", "strava_id", "garmin_id"),
         }
 
     def _latest_metrics(
@@ -277,3 +335,26 @@ def number(value: Any) -> float | int | None:
     if result.is_integer():
         return int(result)
     return round(result, 2)
+
+
+def find_fit_paths(data: Any) -> list[str]:
+    paths = []
+    if isinstance(data, dict):
+        for value in data.values():
+            paths.extend(find_fit_paths(value))
+    elif isinstance(data, list):
+        for value in data:
+            paths.extend(find_fit_paths(value))
+    elif isinstance(data, str):
+        lowered = data.lower()
+        if "fit" in lowered and (lowered.startswith("/api/") or lowered.startswith("api/")):
+            paths.append(data if data.startswith("/") else f"/{data}")
+        elif "fit" in lowered and data.startswith("https://intervals.icu"):
+            paths.append(data.removeprefix("https://intervals.icu"))
+    return paths
+
+
+def is_fit_file(content: bytes) -> bool:
+    if len(content) < 14:
+        return False
+    return content[8:12] == b".FIT" or b".FIT" in content[:32]
