@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-pre-ride-and-fit-fallback-v1"
+APP_VERSION = "2026-07-10-same-day-condition-fit-menu-v1"
 
 
 def main() -> None:
@@ -573,7 +573,7 @@ def build_chatgpt_prompt() -> str:
         "あなたは持久系パフォーマンスコーチです。\n"
         "このJSON内のFIT解析情報を主な根拠に、アスリート本人向けの日本語レビューを作成してください。\n"
         "このアプリのJSONでは、FIT解析JSONは `fit_activity_context` に格納されています。\n"
-        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォームはライド前のコンディション前提です。体重、安静時心拍、睡眠スコア、HRV、FTP、最大心拍数も確認し、ライド結果の評価に反映してください。\n"
+        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォームはIntervals.icuの最新ライド/当日データから取得したコンディション前提です。体重、安静時心拍、睡眠スコア、HRV、FTP、最大心拍数も確認し、ライド結果の評価に反映してください。\n"
         "`manual_inputs` にRPEやメモがあれば、本人の主観情報として使ってください。\n\n"
         "共通の読み取りルール:\n"
         "- このJSONだけを根拠にし、JSON内にない事実は推測で補わないでください。\n"

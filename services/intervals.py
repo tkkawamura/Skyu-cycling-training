@@ -132,10 +132,12 @@ class IntervalsClient:
             for label, params in (
                 ("original_fit", {"format": "fit", "original": "true"}),
                 ("intervals_fit", {"format": "fit"}),
+                ("intervals_fit_type", {"type": "fit"}),
+                ("direct_fit", None),
             ):
                 try:
                     attempted.append(f"{path} ({label})")
-                    response = self._request("GET", path, params=params)
+                    response = self._request("GET", path, params=params) if params else self._request("GET", path)
                     content = self._extract_fit_bytes(response)
                     if content:
                         target.write_bytes(content)
@@ -167,12 +169,20 @@ class IntervalsClient:
             "original",
             "original-file",
             "fit",
+            "fit.fit",
             "fit-file",
+            "fit-file.fit",
             "file.fit",
             "file",
+            "file/original",
+            "file/fit",
             "download.fit",
             "download",
+            "download-file",
+            "download/fit",
+            "download/original",
             "export.fit",
+            "export",
         ]
         generated = []
         for activity_id in ids:
@@ -181,6 +191,8 @@ class IntervalsClient:
             generated.extend(
                 [
                     f"/api/v1/activity/{activity_id}.fit",
+                    f"/api/v1/activity/{activity_id}/files/fit",
+                    f"/api/v1/activity/{activity_id}/files/original",
                     f"/api/activity/{activity_id}.fit",
                     f"/api/activities/{activity_id}.fit",
                 ]
@@ -280,6 +292,9 @@ class IntervalsClient:
             "average_watts": number(first_value(item, "average_watts", "Average Watts")),
             "weighted_average_watts": number(first_value(item, "weighted_average_watts", "Weighted Average Watts", "power")),
             "average_heartrate": number(first_value(item, "average_heartrate", "Average Heart Rate")),
+            "fitness": number(first_value(item, "fitness", "ctl", "icu_ctl", "start_ctl", "ctl_start", "ctl_before", "pre_ctl")),
+            "fatigue": number(first_value(item, "fatigue", "atl", "icu_atl", "start_atl", "atl_start", "atl_before", "pre_atl")),
+            "form": number(first_value(item, "form", "tsb", "icu_tsb", "freshness", "start_form", "form_start", "form_before", "pre_form")),
             "ftp": number(first_value(item, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(item, "max_hr", "max_heartrate", "max_heart_rate", "Max Heart Rate")),
         }
@@ -302,9 +317,9 @@ class IntervalsClient:
             "decoupling": number(first_value(detail, "decoupling", "icu_decoupling")),
             "interval_count": len(detail.get("icu_intervals") or []),
             "external_id": first_value(detail, "external_id", "strava_id", "garmin_id"),
-            "fitness": number(deep_first_value(detail, "start_ctl", "ctl_start", "ctl_before", "pre_ctl", "fitness_before", "fitness_start", "icu_ctl_start", "icu_ctl_before")),
-            "fatigue": number(deep_first_value(detail, "start_atl", "atl_start", "atl_before", "pre_atl", "fatigue_before", "fatigue_start", "icu_atl_start", "icu_atl_before")),
-            "form": number(first_value(detail, "form", "tsb", "icu_tsb", "freshness")),
+            "fitness": number(deep_first_value(detail, "start_ctl", "ctl_start", "ctl_before", "pre_ctl", "fitness_before", "fitness_start", "icu_ctl_start", "icu_ctl_before", "fitness", "ctl", "icu_ctl")),
+            "fatigue": number(deep_first_value(detail, "start_atl", "atl_start", "atl_before", "pre_atl", "fatigue_before", "fatigue_start", "icu_atl_start", "icu_atl_before", "fatigue", "atl", "icu_atl")),
+            "form": number(deep_first_value(detail, "start_form", "form_start", "form_before", "pre_form", "form", "tsb", "icu_tsb", "freshness")),
             "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
         }
@@ -319,16 +334,15 @@ class IntervalsClient:
         latest_wellness = sorted(wellness, key=lambda row: str(first_value(row, "id", "date") or ""))[-1] if wellness else {}
         latest_activity = latest_ride or (activities[0] if activities else {})
         athlete_profile = athlete_profile or {}
-        pre_ride_wellness = self._pre_ride_wellness(wellness, latest_ride)
-        baseline_wellness = pre_ride_wellness or latest_wellness
+        same_day_wellness = self._same_day_wellness(wellness, latest_ride)
+        baseline_wellness = same_day_wellness or latest_wellness
         activity_fitness = number(first_value(latest_activity, "fitness", "ctl_before", "pre_ctl", "start_ctl"))
         activity_fatigue = number(first_value(latest_activity, "fatigue", "atl_before", "pre_atl", "start_atl"))
         fitness = activity_fitness if activity_fitness is not None else number(first_value(baseline_wellness, "ctl", "fitness", "icu_ctl"))
         fatigue = activity_fatigue if activity_fatigue is not None else number(first_value(baseline_wellness, "atl", "fatigue", "icu_atl"))
         native_form = number(
-            first_value(latest_activity, "form_before", "pre_form", "start_form")
+            first_value(latest_activity, "form", "form_before", "pre_form", "start_form")
             or first_value(baseline_wellness, "form", "tsb", "icu_tsb", "freshness")
-            or first_value(latest_activity, "form", "tsb", "icu_tsb", "freshness")
             or deep_first_value(athlete_profile, "form", "tsb", "icu_tsb", "freshness")
         )
         form = native_form
@@ -338,7 +352,7 @@ class IntervalsClient:
             form_source = "computed_fitness_minus_fatigue"
         return {
             "date": first_value(latest_wellness, "id", "date") or latest_activity.get("date"),
-            "condition_baseline": "activity_pre_ride" if activity_fitness is not None or activity_fatigue is not None else ("previous_wellness_before_ride" if pre_ride_wellness else "latest_available"),
+            "condition_baseline": "activity_value" if activity_fitness is not None or activity_fatigue is not None else ("same_day_wellness" if same_day_wellness else "latest_available"),
             "condition_baseline_date": first_value(baseline_wellness, "id", "date"),
             "fitness": fitness,
             "fatigue": fatigue,
@@ -405,18 +419,15 @@ class IntervalsClient:
             )
         return sorted([item for item in trend if item.get("date")], key=lambda item: item["date"])
 
-    def _pre_ride_wellness(self, wellness: list[dict[str, Any]], latest_ride: dict[str, Any] | None) -> dict[str, Any]:
+    def _same_day_wellness(self, wellness: list[dict[str, Any]], latest_ride: dict[str, Any] | None) -> dict[str, Any]:
         ride_date = parse_date((latest_ride or {}).get("date"))
         if not ride_date:
             return {}
-        candidates = []
         for row in wellness:
             row_date = parse_date(first_value(row, "id", "date"))
-            if row_date and row_date < ride_date:
-                candidates.append((row_date, row))
-        if not candidates:
-            return {}
-        return sorted(candidates, key=lambda item: item[0])[-1][1]
+            if row_date == ride_date:
+                return row
+        return {}
 
     def _latest_wellness_number(
         self,
@@ -438,11 +449,14 @@ class IntervalsClient:
 
     def _wellness_debug(self, wellness: list[dict[str, Any]], latest_ride: dict[str, Any] | None) -> dict[str, Any]:
         latest_wellness = sorted(wellness, key=lambda row: str(first_value(row, "id", "date") or ""))[-1] if wellness else {}
-        baseline_wellness = self._pre_ride_wellness(wellness, latest_ride) or latest_wellness
+        same_day_wellness = self._same_day_wellness(wellness, latest_ride)
+        baseline_wellness = same_day_wellness or latest_wellness
         return {
             "row_count": len(wellness),
             "latest_date": first_value(latest_wellness, "id", "date"),
             "latest_keys": sorted(str(key) for key in latest_wellness.keys()),
+            "same_day_date": first_value(same_day_wellness, "id", "date"),
+            "same_day_keys": sorted(str(key) for key in same_day_wellness.keys()),
             "baseline_date": first_value(baseline_wellness, "id", "date"),
             "baseline_keys": sorted(str(key) for key in baseline_wellness.keys()),
         }
