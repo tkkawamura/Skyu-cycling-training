@@ -18,6 +18,7 @@ class IntervalsError(RuntimeError):
 @dataclass
 class IntervalsConfig:
     api_key: str
+    athlete_id: str = "0"
     base_url: str = "https://intervals.icu"
     data_dir: str = "data"
     download_fit: bool = True
@@ -27,6 +28,7 @@ class IntervalsClient:
     def __init__(self, config: IntervalsConfig) -> None:
         self.config = config
         self.base_url = config.base_url.rstrip("/")
+        self.athlete_id = config.athlete_id or "0"
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -67,7 +69,7 @@ class IntervalsClient:
 
     def get_wellness(self, oldest: date, newest: date) -> list[dict[str, Any]]:
         data = self._get_json(
-            "/api/v1/athlete/0/wellness",
+            f"/api/v1/athlete/{self.athlete_id}/wellness",
             params={"oldest": oldest.isoformat(), "newest": newest.isoformat()},
         )
         if isinstance(data, list):
@@ -79,7 +81,7 @@ class IntervalsClient:
     def get_activities(self, oldest: date, newest: date) -> list[dict[str, Any]]:
         try:
             data = self._get_json(
-                "/api/v1/athlete/0/activities",
+                f"/api/v1/athlete/{self.athlete_id}/activities",
                 params={"oldest": oldest.isoformat(), "newest": newest.isoformat()},
             )
             activities = data if isinstance(data, list) else data.get("activities", [])
@@ -178,7 +180,7 @@ class IntervalsClient:
     def _get_activities_csv(self, oldest: date, newest: date) -> list[dict[str, Any]]:
         response = self._request(
             "GET",
-            "/api/v1/athlete/0/activities.csv",
+            f"/api/v1/athlete/{self.athlete_id}/activities.csv",
             params={"oldest": oldest.isoformat(), "newest": newest.isoformat()},
         )
         return list(csv.DictReader(io.StringIO(response.text)))

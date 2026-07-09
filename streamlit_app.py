@@ -22,12 +22,10 @@ def main() -> None:
     st.title("Cycling Training Context Generator")
     st.caption("Intervals.icu metrics and FIT activity context JSON for ChatGPT review.")
 
-    if not is_authenticated():
-        return
-
     st.info(
         "This app does not call the OpenAI API. It generates a JSON file that you can upload to your own ChatGPT account."
     )
+    st.caption("For detailed ride analysis, download the original FIT file from Intervals.icu and upload it below.")
 
     with st.sidebar:
         st.header("Settings")
@@ -36,12 +34,17 @@ def main() -> None:
         body_mass = st.number_input("Body mass kg", min_value=0.0, max_value=200.0, value=float_setting("ATHLETE_BODY_MASS_KG", 63.0))
         max_hr = st.number_input("Max HR bpm", min_value=0, max_value=240, value=int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
         w_prime = st.number_input("W' kJ", min_value=0.0, max_value=80.0, value=float_setting("ATHLETE_W_PRIME_KJ", 0.0))
+        rpe = st.number_input("RPE", min_value=0.0, max_value=10.0, value=0.0, step=0.5)
+        subjective_note = st.text_area("Memo", value="", placeholder="睡眠、疲労感、補給、脚の感覚など")
         include_prompt = st.checkbox("Include ChatGPT prompt", value=True)
         allow_manual_fit = st.checkbox("Allow manual FIT upload fallback", value=True)
 
-    uploaded_fit = None
+    uploaded_file = None
     if allow_manual_fit:
-        uploaded_fit = st.file_uploader("Manual FIT upload fallback", type=["fit"])
+        st.markdown(
+            "Intervals.icu activity page -> Data tab -> Original FIT file -> download, then upload that `.fit` file here."
+        )
+        uploaded_file = st.file_uploader("Original FIT file or generated JSON", type=["fit", "json"])
 
     if st.button("Generate JSON", type="primary", use_container_width=True):
         with st.spinner("Collecting Intervals.icu data and analyzing FIT..."):
@@ -53,32 +56,21 @@ def main() -> None:
                     max_heart_rate_bpm=float(max_hr) if max_hr else None,
                     w_prime_kj=float(w_prime) if w_prime else None,
                 ),
-                uploaded_fit=uploaded_fit,
+                uploaded_file=uploaded_file,
+                manual_inputs={
+                    "rpe_0_10": float(rpe) if rpe else None,
+                    "subjective_note": subjective_note.strip() or None,
+                },
                 include_prompt=include_prompt,
             )
         render_context(context)
 
 
-def is_authenticated() -> bool:
-    password = secret_or_env("APP_PASSWORD", "")
-    if not password or password.startswith("replace_with_"):
-        st.warning("APP_PASSWORD is not configured. Configure it in Streamlit Secrets before publishing.")
-        return True
-    if st.session_state.get("authenticated"):
-        return True
-    entered = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if entered == password:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        st.error("Invalid password")
-    return False
-
-
 def generate_context(
     lookback_days: int,
     athlete: AthleteInputs,
-    uploaded_fit: Any,
+    uploaded_file: Any,
+    manual_inputs: dict[str, Any],
     include_prompt: bool,
 ) -> dict[str, Any]:
     today = date.today()
@@ -87,6 +79,7 @@ def generate_context(
     intervals_client = IntervalsClient(
         IntervalsConfig(
             api_key=secret_or_env("INTERVALS_API_KEY", ""),
+            athlete_id=str(secret_or_env("INTERVALS_ATHLETE_ID", "0")),
             base_url=secret_or_env("INTERVALS_BASE_URL", "https://intervals.icu"),
             data_dir=data_dir,
             download_fit=bool_setting("FIT_DOWNLOAD", True),
@@ -105,6 +98,7 @@ def generate_context(
 
     fit_context = None
     fit_source = None
+    uploaded_json_context = None
     fit_path = intervals_payload.get("fit_path")
     if fit_path:
         try:
@@ -113,15 +107,30 @@ def generate_context(
         except Exception as exc:
             warnings.append(f"FIT auto analysis failed: {exc}")
 
-    if fit_context is None and uploaded_fit is not None:
-        fit_context = analyze_uploaded_fit(builder, uploaded_fit)
-        fit_source = "manual_upload"
+    if uploaded_file is not None:
+        if str(uploaded_file.name).lower().endswith(".json"):
+            uploaded_json_context = load_uploaded_json(uploaded_file)
+            fit_context = extract_fit_context(uploaded_json_context)
+            fit_source = "manual_json_upload"
+        else:
+            fit_context = analyze_uploaded_fit(builder, uploaded_file)
+            fit_source = "manual_fit_upload"
 
+    intervals_context = {
+        "source": intervals_source,
+        "metrics": intervals_payload.get("metrics"),
+        "latest_ride": sanitize_latest_ride(intervals_payload.get("latest_ride")),
+        "trend": intervals_payload.get("trend"),
+        "recent_activities": intervals_payload.get("recent_activities"),
+        "fit_auto_downloaded": bool(fit_path),
+        "fit_analysis_source": fit_source,
+    }
     output = {
-        "schema_version": "cycling_training_context.v1",
+        "schema_version": "cycling_training_review_context.v2",
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "source": "streamlit_community_cloud",
+            "base_context": "fit_activity_context.v2",
             "privacy": {
                 "raw_fit_records_included": False,
                 "location_fields_included": False,
@@ -136,16 +145,11 @@ def generate_context(
             "max_heart_rate_bpm": athlete.max_heart_rate_bpm,
             "w_prime_kj": athlete.w_prime_kj,
         },
-        "intervals_icu": {
-            "source": intervals_source,
-            "metrics": intervals_payload.get("metrics"),
-            "latest_ride": sanitize_latest_ride(intervals_payload.get("latest_ride")),
-            "trend": intervals_payload.get("trend"),
-            "recent_activities": intervals_payload.get("recent_activities"),
-            "fit_auto_downloaded": bool(fit_path),
-            "fit_analysis_source": fit_source,
-        },
+        "manual_inputs": manual_inputs,
+        "intervals_icu": intervals_context,
+        "llm_review_summary": build_review_summary(intervals_context, fit_context, manual_inputs),
         "fit_activity_context": fit_context,
+        "uploaded_json_context": uploaded_json_context if uploaded_json_context and fit_context is None else None,
         "chatgpt_usage": {
             "instruction": "Upload this JSON to ChatGPT and ask for a cycling training review.",
             "recommended_prompt": build_chatgpt_prompt() if include_prompt else None,
@@ -164,6 +168,50 @@ def analyze_uploaded_fit(builder: FitActivityContextBuilder, uploaded_fit: Any) 
         Path(path).unlink(missing_ok=True)
 
 
+def load_uploaded_json(uploaded_file: Any) -> dict[str, Any]:
+    return json.loads(uploaded_file.getvalue().decode("utf-8"))
+
+
+def extract_fit_context(uploaded_json: dict[str, Any]) -> dict[str, Any]:
+    if uploaded_json.get("schema_version") == "fit_activity_context.v2":
+        return uploaded_json
+    nested = uploaded_json.get("fit_activity_context")
+    if isinstance(nested, dict):
+        return nested
+    return uploaded_json
+
+
+def build_review_summary(
+    intervals_context: dict[str, Any],
+    fit_context: dict[str, Any] | None,
+    manual_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    metrics = intervals_context.get("metrics") or {}
+    latest_ride = intervals_context.get("latest_ride") or {}
+    fit_llm = (fit_context or {}).get("llm_summary") or {}
+    return {
+        "purpose": "ChatGPT cycling ride review context",
+        "manual_inputs": manual_inputs,
+        "intervals_today": {
+            "date": metrics.get("date"),
+            "fitness": metrics.get("fitness"),
+            "fatigue": metrics.get("fatigue"),
+            "form": metrics.get("form"),
+            "weight": metrics.get("weight"),
+            "ftp": metrics.get("ftp"),
+            "eftp": metrics.get("eftp"),
+            "training_load": metrics.get("training_load"),
+        },
+        "latest_ride": latest_ride,
+        "fit_session_summary": fit_llm.get("session_summary"),
+        "fit_key_intervals": fit_llm.get("key_intervals"),
+        "fit_key_laps": fit_llm.get("key_laps"),
+        "fit_metric_presence": fit_llm.get("metric_presence"),
+        "fit_data_presence_matrix": fit_llm.get("data_presence_matrix"),
+        "fit_available_metrics": fit_llm.get("available_metrics"),
+    }
+
+
 def render_context(context: dict[str, Any]) -> None:
     metrics = context["intervals_icu"].get("metrics") or {}
     latest = context["intervals_icu"].get("latest_ride") or {}
@@ -178,6 +226,14 @@ def render_context(context: dict[str, Any]) -> None:
 
     st.subheader("Latest Ride")
     st.json(latest, expanded=False)
+
+    fit_context = context.get("fit_activity_context")
+    if fit_context:
+        st.subheader("FIT Activity Context")
+        st.success("Detailed FIT context is included in the downloaded JSON.")
+        st.json(fit_context.get("llm_summary", fit_context), expanded=False)
+    else:
+        st.warning("Detailed FIT context is not included. Upload a FIT file or generated JSON to include the attached-style analysis.")
 
     json_text = json.dumps(context, ensure_ascii=False, indent=2)
     st.download_button(
@@ -197,6 +253,7 @@ def build_chatgpt_prompt() -> str:
         "あなたは持久系パフォーマンスコーチです。添付JSONだけを根拠に、"
         "自転車トレーニングの日本語レビューを作成してください。\n\n"
         "必ず確認する項目:\n"
+        "- llm_review_summary\n"
         "- intervals_icu.metrics の Fitness / Fatigue / Form / weight / FTP / eFTP\n"
         "- intervals_icu.latest_ride\n"
         "- fit_activity_context.llm_summary.metric_presence\n"

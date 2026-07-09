@@ -15,8 +15,8 @@ Garmin records the ride
 - Reads Fitness / Fatigue / Form / weight / FTP / eFTP from Intervals.icu.
 - Reads recent rides from Intervals.icu.
 - Tries to download the latest ride FIT file into `data/fit_files`.
-- Analyzes uploaded `.fit` files into `fit_activity_context.v2`, shaped like the sample JSON.
-- Generates `cycling_training_context.v1` JSON for manual ChatGPT upload.
+- Analyzes original Garmin `.fit` files downloaded from Intervals.icu into `fit_activity_context.v2`, shaped like the sample JSON.
+- Generates `cycling_training_review_context.v2` JSON for manual ChatGPT upload.
 - Stores RPE locally in SQLite.
 - Generates a ride review when the app opens.
 - Shows sample data when API keys are not configured.
@@ -30,7 +30,7 @@ This mode does not call the OpenAI API. It only generates a JSON file containing
 - Intervals.icu Fitness / Fatigue / Form / weight / FTP / eFTP.
 - Latest ride summary.
 - Auto-downloaded FIT analysis when available.
-- Manual FIT upload fallback.
+- Manual original FIT upload from Intervals.icu.
 - A recommended ChatGPT prompt.
 
 Run locally:
@@ -44,8 +44,8 @@ For Streamlit Community Cloud, add these values in the app's Secrets screen:
 
 ```toml
 INTERVALS_API_KEY = "your_intervals_api_key"
+INTERVALS_ATHLETE_ID = "i260523"
 INTERVALS_BASE_URL = "https://intervals.icu"
-APP_PASSWORD = "your_private_password"
 ATHLETE_CRITICAL_POWER_W = 250
 ATHLETE_BODY_MASS_KG = 63
 ATHLETE_MAX_HEART_RATE_BPM = 178
@@ -120,6 +120,14 @@ The JSON intentionally excludes:
 - GPS location fields.
 - Raw 1 Hz records.
 - Full dense duration curves.
+
+Recommended Streamlit workflow:
+
+1. Open the activity in Intervals.icu.
+2. Open the Data tab.
+3. Click Original FIT file.
+4. Upload the downloaded `.fit` file to the Streamlit app.
+5. Download the generated JSON and upload it to ChatGPT.
 
 ## Intervals.icu API key
 
