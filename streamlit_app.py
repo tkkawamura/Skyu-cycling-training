@@ -20,8 +20,9 @@ load_dotenv()
 
 
 def main() -> None:
-    st.set_page_config(page_title="自転車トレーニング評価JSON", layout="wide")
-    st.title("自転車トレーニング評価JSONジェネレーター")
+    st.set_page_config(page_title="トレーニングコーチJSONジェネレータ", layout="wide")
+    inject_styles()
+    st.markdown('<h1 class="app-title">トレーニングコーチJSONジェネレータ</h1>', unsafe_allow_html=True)
 
     lookback_days = int_setting("LOOKBACK_DAYS", 21)
     intervals_snapshot = load_intervals_snapshot(lookback_days)
@@ -111,11 +112,8 @@ def apply_metric_defaults(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_startup_intervals_snapshot(snapshot: dict[str, Any]) -> None:
-    metrics = (snapshot.get("payload") or {}).get("metrics") or {}
     if snapshot.get("source") == "sample":
         st.warning("Intervals.icuの取得に失敗したため、サンプル値を表示しています。")
-    st.caption(f"Intervals.icu取得時刻: {snapshot.get('fetched_at')}")
-    render_metrics(metrics)
 
 
 def generate_context(
@@ -294,14 +292,90 @@ def render_context(context: dict[str, Any]) -> None:
 
 
 def render_metrics(metrics: dict[str, Any]) -> None:
-    cols = st.columns(7)
-    cols[0].metric("フィットネス", display(metrics.get("fitness")))
-    cols[1].metric("ファティーグ", display(metrics.get("fatigue")))
-    cols[2].metric("フォーム", display(metrics.get("form"), "%"))
-    cols[3].metric("体重", display(metrics.get("weight"), "kg"))
-    cols[4].metric("FTP", display(metrics.get("ftp"), "W"))
-    cols[5].metric("eFTP", display(metrics.get("eftp"), "W"))
-    cols[6].metric("最大心拍", display(metrics.get("max_heart_rate"), "bpm"))
+    items = [
+        ("フィットネス", display(metrics.get("fitness"))),
+        ("ファティーグ", display(metrics.get("fatigue"))),
+        ("フォーム", display(metrics.get("form"))),
+        ("体重", display(metrics.get("weight"), "kg")),
+        ("FTP", display(metrics.get("ftp"), "W")),
+        ("eFTP", display(metrics.get("eftp"), "W")),
+        ("最大心拍", display(metrics.get("max_heart_rate"), "bpm")),
+    ]
+    html = ['<div class="metric-grid">']
+    for label, value in items:
+        html.append(
+            '<div class="metric-item">'
+            f'<div class="metric-label">{escape(str(label))}</div>'
+            f'<div class="metric-value">{escape(str(value))}</div>'
+            '</div>'
+        )
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.25rem;
+        }
+        .app-title {
+            font-size: 1.8rem;
+            line-height: 1.25;
+            font-weight: 700;
+            margin: 0 0 1.2rem;
+        }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 0.65rem;
+            margin: 0.4rem 0 1.15rem;
+        }
+        .metric-item {
+            min-width: 0;
+        }
+        .metric-label {
+            color: #586174;
+            font-size: 0.72rem;
+            line-height: 1.2;
+            margin-bottom: 0.18rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .metric-value {
+            color: #313342;
+            font-size: 1.08rem;
+            line-height: 1.2;
+            font-weight: 650;
+            white-space: nowrap;
+        }
+        @media (max-width: 640px) {
+            .block-container {
+                padding-left: 0.85rem;
+                padding-right: 0.85rem;
+                padding-top: 0.8rem;
+            }
+            .app-title {
+                font-size: 1.15rem;
+                margin-bottom: 0.9rem;
+            }
+            .metric-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 0.55rem 0.7rem;
+            }
+            .metric-label {
+                font-size: 0.64rem;
+            }
+            .metric-value {
+                font-size: 0.86rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def compact_latest_ride(latest: dict[str, Any]) -> list[dict[str, Any]]:
