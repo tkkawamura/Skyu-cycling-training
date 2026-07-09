@@ -26,7 +26,6 @@ function render(data) {
   setText("form", fmt(metrics.form));
   setText("weight", metrics.weight ? `${fmt(metrics.weight)} kg` : "-");
   setText("ftp", metrics.ftp ? `${fmt(metrics.ftp)} W` : "-");
-  setText("eftp", metrics.eftp ? `${fmt(metrics.eftp)} W` : "-");
 
   setText("ride-name", ride.name || "No ride found");
   setText("ride-date", ride.date || "-");

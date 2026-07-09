@@ -204,7 +204,6 @@ class IntervalsClient:
                     "form": -6 - idx * 0.2,
                     "weight": 63.4,
                     "ftp": 250,
-                    "eftp": 258,
                     "training_load": 0,
                 }
             )
@@ -275,7 +274,6 @@ class IntervalsClient:
             "weighted_average_watts": number(first_value(item, "weighted_average_watts", "Weighted Average Watts", "power")),
             "average_heartrate": number(first_value(item, "average_heartrate", "Average Heart Rate")),
             "ftp": number(first_value(item, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
-            "eftp": number(first_value(item, "eftp", "e_ftp", "activity_eftp", "estimated_ftp", "estimated_ftp_w", "estimated_ftp_watts", "icu_eftp")),
             "max_heart_rate": number(first_value(item, "max_hr", "max_heartrate", "max_heart_rate", "Max Heart Rate")),
         }
 
@@ -299,10 +297,6 @@ class IntervalsClient:
             "external_id": first_value(detail, "external_id", "strava_id", "garmin_id"),
             "form": number(first_value(detail, "form", "tsb", "icu_tsb", "freshness")),
             "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
-            "eftp": number(
-                first_value(detail, "eftp", "e_ftp", "activity_eftp", "estimated_ftp", "estimated_ftp_w", "estimated_ftp_watts", "icu_eftp")
-                or deep_first_matching_key(detail, "eftp", "estimatedftp")
-            ),
             "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
         }
 
@@ -340,13 +334,6 @@ class IntervalsClient:
                 or deep_first_value(athlete_profile, "ftp", "threshold_power", "power_threshold", "athlete_ftp", "icu_ftp", "cp", "critical_power")
                 or first_value(latest_activity, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")
             ),
-            "eftp": number(
-                first_value(latest_wellness, "eftp", "e_ftp", "estimated_ftp", "activity_eftp", "icu_eftp")
-                or deep_first_value(athlete_profile, "eftp", "e_ftp", "estimated_ftp", "activity_eftp", "icu_eftp")
-                or deep_first_matching_key(athlete_profile, "eftp", "estimatedftp")
-                or first_value(latest_activity, "eftp", "e_ftp", "activity_eftp", "estimated_ftp", "icu_eftp")
-                or deep_first_matching_key(latest_activity, "eftp", "estimatedftp")
-            ),
             "max_heart_rate": number(
                 first_value(latest_wellness, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
                 or deep_first_value(athlete_profile, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
@@ -376,10 +363,6 @@ class IntervalsClient:
                     "form_source": form_source,
                     "weight": number(first_value(row, "weight", "body_mass", "mass")),
                     "ftp": number(first_value(row, "ftp", "threshold_power")),
-                    "eftp": number(
-                        first_value(row, "eftp", "e_ftp", "estimated_ftp", "activity_eftp", "icu_eftp")
-                        or deep_first_matching_key(row, "eftp", "estimatedftp")
-                    ),
                     "training_load": load_by_date.get(row_date, 0),
                 }
             )
@@ -408,33 +391,6 @@ def deep_first_value(data: Any, *keys: str) -> Any:
             if found not in (None, ""):
                 return found
     return None
-
-
-def deep_first_matching_key(data: Any, *tokens: str) -> Any:
-    normalized_tokens = [normalize_key(token) for token in tokens]
-    if isinstance(data, dict):
-        for key, value in data.items():
-            normalized_key = normalize_key(str(key))
-            if (
-                any(token and token in normalized_key for token in normalized_tokens)
-                and value not in (None, "")
-                and not isinstance(value, (dict, list))
-            ):
-                return value
-        for value in data.values():
-            found = deep_first_matching_key(value, *tokens)
-            if found not in (None, ""):
-                return found
-    elif isinstance(data, list):
-        for value in data:
-            found = deep_first_matching_key(value, *tokens)
-            if found not in (None, ""):
-                return found
-    return None
-
-
-def normalize_key(value: str) -> str:
-    return value.lower().replace("_", "").replace("-", "").replace(" ", "")
 
 
 def number(value: Any) -> float | int | None:

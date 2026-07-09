@@ -12,7 +12,7 @@ Garmin records the ride
 
 ## Features
 
-- Reads Fitness / Fatigue / Form / weight / FTP / eFTP from Intervals.icu.
+- Reads Fitness / Fatigue / Form / weight / FTP from Intervals.icu.
 - Reads recent rides from Intervals.icu.
 - Tries to download the latest ride FIT file into `data/fit_files`.
 - Analyzes original Garmin `.fit` files downloaded from Intervals.icu into `fit_activity_context.v2`, shaped like the sample JSON.
@@ -27,7 +27,7 @@ Use `streamlit_app.py` when publishing on Streamlit Community Cloud.
 
 This mode does not call the OpenAI API. It only generates a JSON file containing:
 
-- Intervals.icu Fitness / Fatigue / Form / weight / FTP / eFTP.
+- Intervals.icu Fitness / Fatigue / Form / weight / FTP.
 - Latest ride summary.
 - Auto-downloaded FIT analysis when available.
 - Manual original FIT upload from Intervals.icu.

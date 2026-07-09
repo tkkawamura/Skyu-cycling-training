@@ -101,9 +101,6 @@ def apply_metric_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     metrics = dict(payload.get("metrics") or {})
     if metrics.get("ftp") is None:
         metrics["ftp"] = int_setting("ATHLETE_CRITICAL_POWER_W", 250)
-    if metrics.get("eftp") is None:
-        configured_eftp = int_setting("ATHLETE_EFTP_W", 0)
-        metrics["eftp"] = configured_eftp or None
     if metrics.get("max_heart_rate") is None:
         metrics["max_heart_rate"] = int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178)
     payload = dict(payload)
@@ -244,7 +241,6 @@ def build_review_summary(
             "form": metrics.get("form"),
             "weight": metrics.get("weight"),
             "ftp": metrics.get("ftp"),
-            "eftp": metrics.get("eftp"),
             "max_heart_rate": metrics.get("max_heart_rate"),
             "training_load": metrics.get("training_load"),
         },
@@ -298,7 +294,6 @@ def render_metrics(metrics: dict[str, Any]) -> None:
         ("フォーム", display(metrics.get("form"))),
         ("体重", display(metrics.get("weight"), "kg")),
         ("FTP", display(metrics.get("ftp"), "W")),
-        ("eFTP", display(metrics.get("eftp"), "W")),
         ("最大心拍", display(metrics.get("max_heart_rate"), "bpm")),
     ]
     html = ['<div class="metric-grid">']
@@ -522,11 +517,11 @@ def build_chatgpt_prompt() -> str:
         "あなたは持久系パフォーマンスコーチです。\n"
         "このJSON内のFIT解析情報を主な根拠に、アスリート本人向けの日本語レビューを作成してください。\n"
         "このアプリのJSONでは、FIT解析JSONは `fit_activity_context` に格納されています。\n"
-        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、体重、FTP、eFTP、最大心拍数は、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
+        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、体重、FTP、最大心拍数は、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
         "`manual_inputs` にRPEやメモがあれば、本人の主観情報として使ってください。\n\n"
         "共通の読み取りルール:\n"
         "- このJSONだけを根拠にし、JSON内にない事実は推測で補わないでください。\n"
-        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / weight / FTP / eFTP / max_heart_rate を確認し、コンディション前提を把握してください。\n"
+        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / weight / FTP / max_heart_rate を確認し、コンディション前提を把握してください。\n"
         "- まず `fit_activity_context.llm_summary.metric_presence`, `fit_activity_context.llm_summary.data_presence_matrix`, `fit_activity_context.llm_summary.available_metrics` を確認し、評価に使える指標を確定してください。\n"
         "- 詳細値の真値は `fit_activity_context.activity`, `fit_activity_context.physiology`, `fit_activity_context.signals`, `fit_activity_context.segments` にあります。`llm_summary` は索引・要約として使ってください。\n"
         "- 主要work intervalは `fit_activity_context.segments.auto_interval_segments`、user/device lapは `fit_activity_context.segments.user_lap_segments` を確認してください。\n"
