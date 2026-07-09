@@ -20,11 +20,14 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
+APP_VERSION = "2026-07-10-ride-pickup-diagnostics"
+
 
 def main() -> None:
     st.set_page_config(page_title="トレーニングコーチJSONジェネレータ", layout="wide")
     inject_styles()
     st.markdown('<h1 class="app-title">トレーニングコーチJSONジェネレータ</h1>', unsafe_allow_html=True)
+    st.caption(f"アプリ版: {APP_VERSION}")
 
     lookback_days = int_setting("LOOKBACK_DAYS", 21)
     intervals_snapshot = load_intervals_snapshot(lookback_days)
@@ -97,6 +100,12 @@ def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
         "warnings": warnings,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "fetch_timing": "streamlit_app_session_start_or_rerun_before_json_generation",
+        "fetch_window": {
+            "timezone": "Asia/Tokyo",
+            "today_jst": today.isoformat(),
+            "oldest": oldest.isoformat(),
+            "newest": newest.isoformat(),
+        },
     }
 
 
@@ -160,6 +169,7 @@ def generate_context(
         "source": intervals_source,
         "fetched_at": intervals_snapshot.get("fetched_at"),
         "fetch_timing": intervals_snapshot.get("fetch_timing"),
+        "fetch_window": intervals_snapshot.get("fetch_window"),
         "condition_metrics_purpose": "These Intervals.icu values are fetched automatically at app load/rerun and should be used as the condition baseline for the ride review.",
         "metrics": metrics,
         "latest_ride": sanitize_latest_ride(intervals_payload.get("latest_ride")),
@@ -173,6 +183,7 @@ def generate_context(
         "schema_version": "cycling_training_review_context.v2",
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "app_version": APP_VERSION,
             "source": "streamlit_community_cloud",
             "base_context": "fit_activity_context.v2",
             "privacy": {
@@ -272,6 +283,7 @@ def render_context(context: dict[str, Any]) -> None:
 
     st.subheader("最新ライド")
     st.dataframe(compact_latest_ride(latest), hide_index=True, use_container_width=True)
+    render_fetch_diagnostics(context["intervals_icu"])
 
     fit_context = context.get("fit_activity_context")
     if fit_context:
@@ -320,6 +332,31 @@ def render_metrics(metrics: dict[str, Any]) -> None:
         )
     html.append("</div>")
     st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def render_fetch_diagnostics(intervals_context: dict[str, Any]) -> None:
+    rows = []
+    for activity in (intervals_context.get("recent_activities") or [])[:5]:
+        rows.append(
+            {
+                "日付": activity.get("date"),
+                "開始時刻": activity.get("start_time"),
+                "名前": activity.get("name"),
+                "ID": activity.get("id"),
+            }
+        )
+    with st.expander("取得診断"):
+        st.write(
+            {
+                "app_version": APP_VERSION,
+                "fetch_window": intervals_context.get("fetch_window"),
+                "fit_auto_download": intervals_context.get("fit_auto_download"),
+            }
+        )
+        if rows:
+            st.dataframe(rows, hide_index=True, use_container_width=True)
+        else:
+            st.info("Intervals.icu APIからアクティビティ候補を取得できていません。")
 
 
 def inject_styles() -> None:
