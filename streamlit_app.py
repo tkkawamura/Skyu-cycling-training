@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-ride-pickup-diagnostics"
+APP_VERSION = "2026-07-10-pre-ride-baseline-v2"
 
 
 def main() -> None:
@@ -175,6 +175,7 @@ def generate_context(
         "latest_ride": sanitize_latest_ride(intervals_payload.get("latest_ride")),
         "trend": intervals_payload.get("trend"),
         "recent_activities": intervals_payload.get("recent_activities"),
+        "wellness_debug": intervals_payload.get("wellness_debug"),
         "fit_auto_downloaded": bool(fit_path),
         "fit_auto_download": intervals_payload.get("fit_download_info"),
         "fit_analysis_source": fit_source,
@@ -256,7 +257,8 @@ def build_review_summary(
             "fitness": metrics.get("fitness"),
             "fatigue": metrics.get("fatigue"),
             "form": metrics.get("form"),
-            "pre_ride_ctl": metrics.get("pre_ride_ctl"),
+            "condition_baseline": metrics.get("condition_baseline"),
+            "condition_baseline_date": metrics.get("condition_baseline_date"),
             "weight": metrics.get("weight"),
             "resting_heart_rate": metrics.get("resting_heart_rate"),
             "sleep_score": metrics.get("sleep_score"),
@@ -314,7 +316,6 @@ def render_metrics(metrics: dict[str, Any]) -> None:
         ("フィットネス", display(metrics.get("fitness"))),
         ("ファティーグ", display(metrics.get("fatigue"))),
         ("フォーム", display(metrics.get("form"))),
-        ("ライド前CTL", display(metrics.get("pre_ride_ctl"))),
         ("体重", display(metrics.get("weight"), "kg")),
         ("安静時心拍", display(metrics.get("resting_heart_rate"), "bpm")),
         ("睡眠スコア", display(metrics.get("sleep_score"))),
@@ -332,6 +333,8 @@ def render_metrics(metrics: dict[str, Any]) -> None:
         )
     html.append("</div>")
     st.markdown("".join(html), unsafe_allow_html=True)
+    if metrics.get("condition_baseline_date"):
+        st.caption(f"コンディション基準日: {metrics.get('condition_baseline_date')} / {metrics.get('condition_baseline')}")
 
 
 def render_fetch_diagnostics(intervals_context: dict[str, Any]) -> None:
@@ -350,6 +353,8 @@ def render_fetch_diagnostics(intervals_context: dict[str, Any]) -> None:
             {
                 "app_version": APP_VERSION,
                 "fetch_window": intervals_context.get("fetch_window"),
+                "metrics": intervals_context.get("metrics"),
+                "wellness_debug": intervals_context.get("wellness_debug"),
                 "fit_auto_download": intervals_context.get("fit_auto_download"),
             }
         )
@@ -568,11 +573,11 @@ def build_chatgpt_prompt() -> str:
         "あなたは持久系パフォーマンスコーチです。\n"
         "このJSON内のFIT解析情報を主な根拠に、アスリート本人向けの日本語レビューを作成してください。\n"
         "このアプリのJSONでは、FIT解析JSONは `fit_activity_context` に格納されています。\n"
-        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、ライド前CTL、体重、安静時心拍、睡眠スコア、HRV、FTP、最大心拍数は、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
+        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォームはライド前のコンディション前提です。体重、安静時心拍、睡眠スコア、HRV、FTP、最大心拍数も確認し、ライド結果の評価に反映してください。\n"
         "`manual_inputs` にRPEやメモがあれば、本人の主観情報として使ってください。\n\n"
         "共通の読み取りルール:\n"
         "- このJSONだけを根拠にし、JSON内にない事実は推測で補わないでください。\n"
-        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / pre_ride_ctl / weight / resting_heart_rate / sleep_score / hrv / FTP / max_heart_rate を確認し、コンディション前提を把握してください。\n"
+        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / condition_baseline / condition_baseline_date / weight / resting_heart_rate / sleep_score / hrv / FTP / max_heart_rate を確認し、コンディション前提を把握してください。\n"
         "- まず `fit_activity_context.llm_summary.metric_presence`, `fit_activity_context.llm_summary.data_presence_matrix`, `fit_activity_context.llm_summary.available_metrics` を確認し、評価に使える指標を確定してください。\n"
         "- 詳細値の真値は `fit_activity_context.activity`, `fit_activity_context.physiology`, `fit_activity_context.signals`, `fit_activity_context.segments` にあります。`llm_summary` は索引・要約として使ってください。\n"
         "- 主要work intervalは `fit_activity_context.segments.auto_interval_segments`、user/device lapは `fit_activity_context.segments.user_lap_segments` を確認してください。\n"

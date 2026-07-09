@@ -68,6 +68,7 @@ class IntervalsClient:
             "activity_detail_available": bool(activity_detail),
             "fit_path": fit_path,
             "fit_download_info": fit_download_info,
+            "wellness_debug": self._wellness_debug(wellness, latest_ride),
             "trend": trend,
             "recent_activities": activities[:12],
         }
@@ -312,10 +313,12 @@ class IntervalsClient:
         latest_activity = latest_ride or (activities[0] if activities else {})
         athlete_profile = athlete_profile or {}
         pre_ride_wellness = self._pre_ride_wellness(wellness, latest_ride)
-        fitness = number(first_value(latest_wellness, "ctl", "fitness", "icu_ctl"))
-        fatigue = number(first_value(latest_wellness, "atl", "fatigue", "icu_atl"))
+        baseline_wellness = pre_ride_wellness or latest_wellness
+        ride_date = parse_date((latest_ride or {}).get("date"))
+        fitness = number(first_value(baseline_wellness, "ctl", "fitness", "icu_ctl"))
+        fatigue = number(first_value(baseline_wellness, "atl", "fatigue", "icu_atl"))
         native_form = number(
-            first_value(latest_wellness, "form", "tsb", "icu_tsb", "freshness")
+            first_value(baseline_wellness, "form", "tsb", "icu_tsb", "freshness")
             or first_value(latest_activity, "form", "tsb", "icu_tsb", "freshness")
             or deep_first_value(athlete_profile, "form", "tsb", "icu_tsb", "freshness")
         )
@@ -326,18 +329,35 @@ class IntervalsClient:
             form_source = "computed_fitness_minus_fatigue"
         return {
             "date": first_value(latest_wellness, "id", "date") or latest_activity.get("date"),
+            "condition_baseline": "pre_ride" if pre_ride_wellness else "latest_available",
+            "condition_baseline_date": first_value(baseline_wellness, "id", "date"),
             "fitness": fitness,
             "fatigue": fatigue,
             "form": form,
             "form_source": form_source,
-            "pre_ride_ctl": number(first_value(pre_ride_wellness, "ctl", "fitness", "icu_ctl")),
-            "weight": number(first_value(latest_wellness, "weight", "body_mass", "mass") or first_value(athlete_profile, "weight", "body_mass", "mass")),
+            "weight": self._latest_wellness_number(
+                wellness,
+                ("weight", "weight_kg", "body_mass", "bodyMass", "body_weight", "mass", "Weight"),
+                max_date=ride_date,
+            ) or number(deep_first_value(athlete_profile, "weight", "weight_kg", "body_mass", "bodyMass", "body_weight", "mass")),
             "resting_heart_rate": number(
-                first_value(latest_wellness, "resting_hr", "resting_heartrate", "resting_heart_rate", "restingHR", "rhr")
-                or deep_first_value(athlete_profile, "resting_hr", "resting_heartrate", "resting_heart_rate", "restingHR", "rhr")
+                self._latest_wellness_number(
+                    wellness,
+                    ("resting_hr", "resting_heartrate", "resting_heart_rate", "restingHR", "restingHeartRate", "restingHeartrate", "rhr"),
+                    max_date=ride_date,
+                )
+                or deep_first_value(athlete_profile, "resting_hr", "resting_heartrate", "resting_heart_rate", "restingHR", "restingHeartRate", "rhr")
             ),
-            "sleep_score": number(first_value(latest_wellness, "sleep_score", "sleepScore", "sleep_quality", "sleepQuality")),
-            "hrv": number(first_value(latest_wellness, "hrv", "hrv_rmssd", "rmssd", "HRV")),
+            "sleep_score": self._latest_wellness_number(
+                wellness,
+                ("sleep_score", "sleepScore", "sleep_quality", "sleepQuality", "sleep_score_percent", "sleepScorePercent", "sleep_rating", "sleepRating"),
+                max_date=ride_date,
+            ),
+            "hrv": self._latest_wellness_number(
+                wellness,
+                ("hrv", "hrv_rmssd", "hrvRmssd", "hrvRMSSD", "rmssd", "HRV", "hrv_sdnn", "hrvSDNN", "sdnn"),
+                max_date=ride_date,
+            ),
             "ftp": number(
                 first_value(latest_wellness, "ftp", "threshold_power", "power_threshold", "icu_ftp")
                 or deep_first_value(athlete_profile, "ftp", "threshold_power", "power_threshold", "athlete_ftp", "icu_ftp", "cp", "critical_power")
@@ -393,12 +413,50 @@ class IntervalsClient:
             return {}
         return sorted(candidates, key=lambda item: item[0])[-1][1]
 
+    def _latest_wellness_number(
+        self,
+        wellness: list[dict[str, Any]],
+        keys: tuple[str, ...],
+        max_date: date | None = None,
+    ) -> float | int | None:
+        candidates = []
+        for row in wellness:
+            row_date = parse_date(first_value(row, "id", "date"))
+            if max_date and row_date and row_date > max_date:
+                continue
+            value = number(first_value(row, *keys))
+            if value is not None:
+                candidates.append((row_date or date.min, value))
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda item: item[0])[-1][1]
+
+    def _wellness_debug(self, wellness: list[dict[str, Any]], latest_ride: dict[str, Any] | None) -> dict[str, Any]:
+        latest_wellness = sorted(wellness, key=lambda row: str(first_value(row, "id", "date") or ""))[-1] if wellness else {}
+        baseline_wellness = self._pre_ride_wellness(wellness, latest_ride) or latest_wellness
+        return {
+            "row_count": len(wellness),
+            "latest_date": first_value(latest_wellness, "id", "date"),
+            "latest_keys": sorted(str(key) for key in latest_wellness.keys()),
+            "baseline_date": first_value(baseline_wellness, "id", "date"),
+            "baseline_keys": sorted(str(key) for key in baseline_wellness.keys()),
+        }
+
 
 def first_value(data: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in data and data[key] not in (None, ""):
             return data[key]
+    normalized = {normalize_key(str(key)): value for key, value in data.items()}
+    for key in keys:
+        value = normalized.get(normalize_key(key))
+        if value not in (None, ""):
+            return value
     return None
+
+
+def normalize_key(value: str) -> str:
+    return value.lower().replace("_", "").replace("-", "").replace(" ", "")
 
 
 def deep_first_value(data: Any, *keys: str) -> Any:
@@ -422,6 +480,10 @@ def parse_date(value: Any) -> date | None:
     if not value:
         return None
     text = date_part(value)
+    if text:
+        text = text.replace("/", "-")
+    if not text:
+        return None
     try:
         return date.fromisoformat(text)
     except ValueError:
