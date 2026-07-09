@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from html import escape
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 from services.fit_context import AthleteInputs, FitActivityContextBuilder
@@ -18,39 +20,46 @@ load_dotenv()
 
 
 def main() -> None:
-    st.set_page_config(page_title="Cycling Training Context", layout="wide")
-    st.title("Cycling Training Context Generator")
-    st.caption("Intervals.icu metrics and FIT activity context JSON for ChatGPT review.")
+    st.set_page_config(page_title="自転車トレーニング評価JSON", layout="wide")
+    st.title("自転車トレーニング評価JSONジェネレーター")
+    st.caption("Intervals.icuのコンディション指標とFIT解析をまとめて、ChatGPT貼り付け用テキストを作成します。")
 
     st.info(
-        "This app does not call the OpenAI API. It generates a JSON file that you can upload to your own ChatGPT account."
+        "このアプリはOpenAI APIを呼びません。ChatGPTに貼り付けるためのテキストを生成します。"
     )
-    st.caption("For detailed ride analysis, download the original FIT file from Intervals.icu and upload it below.")
 
     with st.sidebar:
-        st.header("Settings")
-        lookback_days = st.number_input("Lookback days", min_value=1, max_value=180, value=int_setting("LOOKBACK_DAYS", 21))
-        cp = st.number_input("CP W", min_value=0, max_value=800, value=int_setting("ATHLETE_CRITICAL_POWER_W", 250))
-        body_mass = st.number_input("Body mass kg", min_value=0.0, max_value=200.0, value=float_setting("ATHLETE_BODY_MASS_KG", 63.0))
-        max_hr = st.number_input("Max HR bpm", min_value=0, max_value=240, value=int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
-        w_prime = st.number_input("W' kJ", min_value=0.0, max_value=80.0, value=float_setting("ATHLETE_W_PRIME_KJ", 0.0))
-        rpe = st.number_input("RPE", min_value=0.0, max_value=10.0, value=0.0, step=0.5)
-        subjective_note = st.text_area("Memo", value="", placeholder="睡眠、疲労感、補給、脚の感覚など")
-        include_prompt = st.checkbox("Include ChatGPT prompt", value=True)
-        allow_manual_fit = st.checkbox("Allow manual FIT upload fallback", value=True)
+        st.header("設定")
+        lookback_days = st.number_input("取得期間（日）", min_value=1, max_value=180, value=int_setting("LOOKBACK_DAYS", 21))
 
     intervals_snapshot = load_intervals_snapshot(int(lookback_days))
     render_startup_intervals_snapshot(intervals_snapshot)
+    metrics = (intervals_snapshot.get("payload") or {}).get("metrics") or {}
+
+    with st.sidebar:
+        cp_default = int(metrics.get("ftp") or int_setting("ATHLETE_CRITICAL_POWER_W", 250))
+        body_mass_default = float(metrics.get("weight") or float_setting("ATHLETE_BODY_MASS_KG", 63.0))
+        max_hr_default = int(metrics.get("max_heart_rate") or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
+        cp = st.number_input("基準パワー CP/FTP (W)", min_value=0, max_value=800, value=cp_default)
+        body_mass = st.number_input("体重 (kg)", min_value=0.0, max_value=200.0, value=body_mass_default)
+        max_hr = st.number_input("最大心拍数 (bpm)", min_value=0, max_value=240, value=max_hr_default)
+        w_prime = st.number_input("W' (kJ)", min_value=0.0, max_value=80.0, value=float_setting("ATHLETE_W_PRIME_KJ", 0.0))
+        rpe_options = ["未入力"] + list(range(1, 11))
+        pre_rpe = st.selectbox("ライド前RPE", rpe_options, index=0)
+        post_rpe = st.selectbox("ライド後RPE", rpe_options, index=0)
+        subjective_note = st.text_area("メモ", value="", placeholder="睡眠、疲労感、補給、脚の感覚など")
+        include_prompt = st.checkbox("ChatGPT用プロンプトを含める", value=True)
+        allow_manual_fit = st.checkbox("FIT/JSON手動アップロードを使う", value=True)
 
     uploaded_file = None
     if allow_manual_fit:
         st.markdown(
-            "Intervals.icu activity page -> Data tab -> Original FIT file -> download, then upload that `.fit` file here."
+            "必要な場合だけ、Intervals.icuのアクティビティ画面 → データ → オリジナルFITファイル から取得した `.fit` をアップロードしてください。"
         )
-        uploaded_file = st.file_uploader("Original FIT file or generated JSON", type=["fit", "json"])
+        uploaded_file = st.file_uploader("オリジナルFITファイルまたは生成済みJSON", type=["fit", "json"])
 
-    if st.button("Generate JSON", type="primary", use_container_width=True):
-        with st.spinner("Collecting Intervals.icu data and analyzing FIT..."):
+    if st.button("ChatGPT貼り付け用テキストを生成", type="primary", use_container_width=True):
+        with st.spinner("Intervals.icu情報とFITを解析しています..."):
             context = generate_context(
                 lookback_days=int(lookback_days),
                 athlete=AthleteInputs(
@@ -61,7 +70,8 @@ def main() -> None:
                 ),
                 uploaded_file=uploaded_file,
                 manual_inputs={
-                    "rpe_0_10": float(rpe) if rpe else None,
+                    "pre_ride_rpe_1_10": None if pre_rpe == "未入力" else int(pre_rpe),
+                    "post_ride_rpe_1_10": None if post_rpe == "未入力" else int(post_rpe),
                     "subjective_note": subjective_note.strip() or None,
                 },
                 intervals_snapshot=intervals_snapshot,
@@ -91,6 +101,7 @@ def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
         payload = intervals_client.sample_dashboard(oldest=oldest, newest=today)
         source = "sample"
         warnings.append(str(exc))
+    payload = apply_metric_defaults(payload)
     return {
         "payload": payload,
         "source": source,
@@ -100,18 +111,26 @@ def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
     }
 
 
+def apply_metric_defaults(payload: dict[str, Any]) -> dict[str, Any]:
+    metrics = dict(payload.get("metrics") or {})
+    if metrics.get("ftp") is None:
+        metrics["ftp"] = int_setting("ATHLETE_CRITICAL_POWER_W", 250)
+    if metrics.get("eftp") is None:
+        configured_eftp = int_setting("ATHLETE_EFTP_W", 0)
+        metrics["eftp"] = configured_eftp or None
+    if metrics.get("max_heart_rate") is None:
+        metrics["max_heart_rate"] = int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178)
+    payload = dict(payload)
+    payload["metrics"] = metrics
+    return payload
+
+
 def render_startup_intervals_snapshot(snapshot: dict[str, Any]) -> None:
     metrics = (snapshot.get("payload") or {}).get("metrics") or {}
     if snapshot.get("source") == "sample":
-        st.warning("Intervals.icu metrics are sample data because live fetch failed.")
-    st.caption(f"Intervals.icu snapshot fetched at {snapshot.get('fetched_at')}")
-    cols = st.columns(6)
-    cols[0].metric("Fitness", display(metrics.get("fitness")))
-    cols[1].metric("Fatigue", display(metrics.get("fatigue")))
-    cols[2].metric("Form", display(metrics.get("form")))
-    cols[3].metric("Weight", display(metrics.get("weight"), "kg"))
-    cols[4].metric("FTP", display(metrics.get("ftp"), "W"))
-    cols[5].metric("eFTP", display(metrics.get("eftp"), "W"))
+        st.warning("Intervals.icuの取得に失敗したため、サンプル値を表示しています。")
+    st.caption(f"Intervals.icu取得時刻: {snapshot.get('fetched_at')}")
+    render_metrics(metrics)
 
 
 def generate_context(
@@ -148,12 +167,18 @@ def generate_context(
             fit_context = analyze_uploaded_fit(builder, uploaded_file)
             fit_source = "manual_fit_upload"
 
+    metrics = dict(intervals_payload.get("metrics") or {})
+    if metrics.get("max_heart_rate") is None and athlete.max_heart_rate_bpm:
+        metrics["max_heart_rate"] = athlete.max_heart_rate_bpm
+    if metrics.get("ftp") is None and athlete.critical_power_w:
+        metrics["ftp"] = athlete.critical_power_w
+
     intervals_context = {
         "source": intervals_source,
         "fetched_at": intervals_snapshot.get("fetched_at"),
         "fetch_timing": intervals_snapshot.get("fetch_timing"),
         "condition_metrics_purpose": "These Intervals.icu values are fetched automatically at app load/rerun and should be used as the condition baseline for the ride review.",
-        "metrics": intervals_payload.get("metrics"),
+        "metrics": metrics,
         "latest_ride": sanitize_latest_ride(intervals_payload.get("latest_ride")),
         "trend": intervals_payload.get("trend"),
         "recent_activities": intervals_payload.get("recent_activities"),
@@ -237,6 +262,7 @@ def build_review_summary(
             "weight": metrics.get("weight"),
             "ftp": metrics.get("ftp"),
             "eftp": metrics.get("eftp"),
+            "max_heart_rate": metrics.get("max_heart_rate"),
             "training_load": metrics.get("training_load"),
         },
         "latest_ride": latest_ride,
@@ -253,44 +279,111 @@ def render_context(context: dict[str, Any]) -> None:
     metrics = context["intervals_icu"].get("metrics") or {}
     latest = context["intervals_icu"].get("latest_ride") or {}
 
-    cols = st.columns(6)
-    cols[0].metric("Fitness", display(metrics.get("fitness")))
-    cols[1].metric("Fatigue", display(metrics.get("fatigue")))
-    cols[2].metric("Form", display(metrics.get("form")))
-    cols[3].metric("Weight", display(metrics.get("weight"), "kg"))
-    cols[4].metric("FTP", display(metrics.get("ftp"), "W"))
-    cols[5].metric("eFTP", display(metrics.get("eftp"), "W"))
+    render_metrics(metrics)
 
-    st.subheader("Latest Ride")
-    st.json(latest, expanded=False)
+    st.subheader("最新ライド")
+    st.table(compact_latest_ride(latest))
 
     fit_context = context.get("fit_activity_context")
     if fit_context:
-        st.subheader("FIT Activity Context")
-        st.success("Detailed FIT context is included in the downloaded JSON.")
-        st.json(fit_context.get("llm_summary", fit_context), expanded=False)
+        st.subheader("FIT解析")
+        st.success("詳細なFIT解析情報をChatGPT貼り付け用テキストに含めました。")
+        st.table(compact_fit_summary(fit_context))
     else:
-        st.warning("Detailed FIT context is not included. Upload a FIT file or generated JSON to include the attached-style analysis.")
+        st.warning("詳細なFIT解析情報は含まれていません。自動取得に失敗した場合は、FITファイルをアップロードしてください。")
 
     json_text = json.dumps(context, ensure_ascii=False, indent=2)
     paste_text = build_paste_text(context)
-    st.subheader("Copy & Paste to ChatGPT")
-    st.text_area(
-        "Copy this text and paste it into ChatGPT",
-        value=paste_text,
-        height=360,
-        help="iPhoneでは欄内を長押しして全選択、コピーしてChatGPTへ貼り付けてください。",
-    )
+    st.subheader("ChatGPTへ送るテキスト")
+    render_copy_box(paste_text)
     st.download_button(
-        "Download JSON for ChatGPT",
+        "JSONをダウンロード",
         data=json_text,
         file_name=f"cycling_training_context_{date.today().isoformat()}.json",
         mime="application/json",
         use_container_width=True,
     )
 
-    st.subheader("JSON Preview")
-    st.json(context, expanded=False)
+    with st.expander("詳細JSONを確認する"):
+        st.json(context, expanded=False)
+
+
+def render_metrics(metrics: dict[str, Any]) -> None:
+    cols = st.columns(7)
+    cols[0].metric("フィットネス", display(metrics.get("fitness")))
+    cols[1].metric("ファティーグ", display(metrics.get("fatigue")))
+    cols[2].metric("フォーム", display(metrics.get("form")))
+    cols[3].metric("体重", display(metrics.get("weight"), "kg"))
+    cols[4].metric("FTP", display(metrics.get("ftp"), "W"))
+    cols[5].metric("eFTP", display(metrics.get("eftp"), "W"))
+    cols[6].metric("最大心拍", display(metrics.get("max_heart_rate"), "bpm"))
+
+
+def compact_latest_ride(latest: dict[str, Any]) -> list[dict[str, Any]]:
+    if not latest:
+        return [{"項目": "状態", "値": "最新ライド情報なし"}]
+    labels = {
+        "date": "日付",
+        "name": "名前",
+        "type": "種目",
+        "moving_time": "移動時間(秒)",
+        "distance": "距離(m)",
+        "training_load": "トレーニング負荷",
+        "average_watts": "平均パワー(W)",
+        "weighted_average_watts": "正規化/加重パワー(W)",
+        "average_heartrate": "平均心拍(bpm)",
+    }
+    return [{"項目": label, "値": latest.get(key)} for key, label in labels.items() if latest.get(key) not in (None, "")]
+
+
+def compact_fit_summary(fit_context: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = ((fit_context or {}).get("llm_summary") or {}).get("session_summary") or {}
+    labels = {
+        "duration_s": "時間(秒)",
+        "distance_m": "距離(m)",
+        "total_work_kj": "仕事量(kJ)",
+        "mean_power_w": "平均パワー(W)",
+        "weighted_power_w": "加重パワー(W)",
+        "intensity_ratio": "強度比",
+        "session_load_score": "負荷スコア",
+        "mean_heart_rate_bpm": "平均心拍(bpm)",
+        "mean_cadence_rpm": "平均ケイデンス(rpm)",
+    }
+    if not summary:
+        return [{"項目": "状態", "値": "FIT解析サマリーなし"}]
+    return [{"項目": label, "値": summary.get(key)} for key, label in labels.items() if summary.get(key) not in (None, "")]
+
+
+def render_copy_box(text: str) -> None:
+    escaped_text = escape(text)
+    components.html(
+        f"""
+        <div style="font-family: sans-serif;">
+          <button id="copyButton" style="width:100%;padding:12px 16px;border:0;border-radius:6px;background:#ff4b4b;color:white;font-weight:700;font-size:16px;">
+            ワンタップでコピー
+          </button>
+          <div id="copyStatus" style="margin:8px 0;color:#0a7f32;font-size:14px;"></div>
+          <textarea id="copyText" readonly style="width:100%;height:280px;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:12px;font-size:13px;line-height:1.45;">{escaped_text}</textarea>
+        </div>
+        <script>
+        const button = document.getElementById("copyButton");
+        const status = document.getElementById("copyStatus");
+        const textArea = document.getElementById("copyText");
+        button.addEventListener("click", async () => {{
+          textArea.focus();
+          textArea.select();
+          try {{
+            await navigator.clipboard.writeText(textArea.value);
+            status.textContent = "コピーしました。ChatGPTに貼り付けてください。";
+          }} catch (err) {{
+            document.execCommand("copy");
+            status.textContent = "コピーしました。ChatGPTに貼り付けてください。";
+          }}
+        }});
+        </script>
+        """,
+        height=390,
+    )
 
 
 def build_paste_text(context: dict[str, Any]) -> str:
@@ -310,11 +403,11 @@ def build_chatgpt_prompt() -> str:
         "あなたは持久系パフォーマンスコーチです。\n"
         "このJSON内のFIT解析情報を主な根拠に、アスリート本人向けの日本語レビューを作成してください。\n"
         "このアプリのJSONでは、FIT解析JSONは `fit_activity_context` に格納されています。\n"
-        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、体重、FTP、eFTPは、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
+        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、体重、FTP、eFTP、最大心拍数は、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
         "`manual_inputs` にRPEやメモがあれば、本人の主観情報として使ってください。\n\n"
         "共通の読み取りルール:\n"
         "- このJSONだけを根拠にし、JSON内にない事実は推測で補わないでください。\n"
-        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / weight / FTP / eFTP を確認し、コンディション前提を把握してください。\n"
+        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / weight / FTP / eFTP / max_heart_rate を確認し、コンディション前提を把握してください。\n"
         "- まず `fit_activity_context.llm_summary.metric_presence`, `fit_activity_context.llm_summary.data_presence_matrix`, `fit_activity_context.llm_summary.available_metrics` を確認し、評価に使える指標を確定してください。\n"
         "- 詳細値の真値は `fit_activity_context.activity`, `fit_activity_context.physiology`, `fit_activity_context.signals`, `fit_activity_context.segments` にあります。`llm_summary` は索引・要約として使ってください。\n"
         "- 主要work intervalは `fit_activity_context.segments.auto_interval_segments`、user/device lapは `fit_activity_context.segments.user_lap_segments` を確認してください。\n"

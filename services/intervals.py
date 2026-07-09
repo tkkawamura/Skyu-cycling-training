@@ -46,6 +46,7 @@ class IntervalsClient:
 
         wellness = self.get_wellness(oldest, newest)
         activities = self.get_activities(oldest, newest)
+        athlete_profile = self.get_athlete_profile()
         latest_ride = self._find_latest_ride(activities)
 
         activity_detail = None
@@ -57,11 +58,12 @@ class IntervalsClient:
             if self.config.download_fit:
                 fit_path, fit_download_info = self.download_fit(latest_ride, activity_detail)
 
-        metrics = self._latest_metrics(wellness, activities, latest_ride)
+        metrics = self._latest_metrics(wellness, activities, latest_ride, athlete_profile)
         trend = self._build_trend(wellness, activities)
 
         return {
             "metrics": metrics,
+            "athlete_profile_available": bool(athlete_profile),
             "latest_ride": latest_ride,
             "activity_detail_available": bool(activity_detail),
             "fit_path": fit_path,
@@ -101,6 +103,20 @@ class IntervalsClient:
             return data if isinstance(data, dict) else None
         except IntervalsError:
             return None
+
+    def get_athlete_profile(self) -> dict[str, Any]:
+        for path in (
+            f"/api/v1/athlete/{self.athlete_id}",
+            f"/api/v1/athlete/{self.athlete_id}/profile",
+            f"/api/v1/athlete/{self.athlete_id}/settings",
+        ):
+            try:
+                data = self._get_json(path)
+                if isinstance(data, dict):
+                    return data
+            except IntervalsError:
+                continue
+        return {}
 
     def download_fit(self, activity: dict[str, Any], detail: dict[str, Any] | None = None) -> tuple[str | None, dict[str, Any]]:
         activity_id = str(activity.get("id") or "")
@@ -195,6 +211,7 @@ class IntervalsClient:
         latest = trend[-1]
         return {
             "metrics": latest,
+            "athlete_profile_available": False,
             "latest_ride": {
                 "id": "sample",
                 "date": newest.isoformat(),
@@ -257,6 +274,9 @@ class IntervalsClient:
             "average_watts": number(first_value(item, "average_watts", "Average Watts")),
             "weighted_average_watts": number(first_value(item, "weighted_average_watts", "Weighted Average Watts", "power")),
             "average_heartrate": number(first_value(item, "average_heartrate", "Average Heart Rate")),
+            "ftp": number(first_value(item, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
+            "eftp": number(first_value(item, "eftp", "activity_eftp", "estimated_ftp")),
+            "max_heart_rate": number(first_value(item, "max_hr", "max_heartrate", "max_heart_rate", "Max Heart Rate")),
         }
 
     def _find_latest_ride(self, activities: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -277,6 +297,9 @@ class IntervalsClient:
             "decoupling": number(first_value(detail, "decoupling", "icu_decoupling")),
             "interval_count": len(detail.get("icu_intervals") or []),
             "external_id": first_value(detail, "external_id", "strava_id", "garmin_id"),
+            "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
+            "eftp": number(first_value(detail, "eftp", "activity_eftp", "estimated_ftp")),
+            "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
         }
 
     def _latest_metrics(
@@ -284,17 +307,36 @@ class IntervalsClient:
         wellness: list[dict[str, Any]],
         activities: list[dict[str, Any]],
         latest_ride: dict[str, Any] | None,
+        athlete_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         latest_wellness = sorted(wellness, key=lambda row: str(first_value(row, "id", "date") or ""))[-1] if wellness else {}
         latest_activity = latest_ride or (activities[0] if activities else {})
+        athlete_profile = athlete_profile or {}
+        fitness = number(first_value(latest_wellness, "ctl", "fitness", "icu_ctl"))
+        fatigue = number(first_value(latest_wellness, "atl", "fatigue", "icu_atl"))
+        form = number(first_value(latest_wellness, "tsb", "form", "icu_tsb", "freshness"))
+        if form is None and fitness is not None and fatigue is not None:
+            form = round(fitness - fatigue, 2)
         return {
             "date": first_value(latest_wellness, "id", "date") or latest_activity.get("date"),
-            "fitness": number(first_value(latest_wellness, "ctl", "fitness", "icu_ctl")),
-            "fatigue": number(first_value(latest_wellness, "atl", "fatigue", "icu_atl")),
-            "form": number(first_value(latest_wellness, "tsb", "form", "icu_tsb")),
-            "weight": number(first_value(latest_wellness, "weight", "body_mass", "mass")),
-            "ftp": number(first_value(latest_wellness, "ftp", "threshold_power")),
-            "eftp": number(first_value(latest_wellness, "eftp", "eftp", "estimated_ftp")),
+            "fitness": fitness,
+            "fatigue": fatigue,
+            "form": form,
+            "weight": number(first_value(latest_wellness, "weight", "body_mass", "mass") or first_value(athlete_profile, "weight", "body_mass", "mass")),
+            "ftp": number(
+                first_value(latest_wellness, "ftp", "threshold_power", "power_threshold", "icu_ftp")
+                or deep_first_value(athlete_profile, "ftp", "threshold_power", "power_threshold", "athlete_ftp", "icu_ftp", "cp", "critical_power")
+                or first_value(latest_activity, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")
+            ),
+            "eftp": number(
+                first_value(latest_wellness, "eftp", "estimated_ftp", "activity_eftp")
+                or deep_first_value(athlete_profile, "eftp", "estimated_ftp", "activity_eftp")
+                or first_value(latest_activity, "eftp", "activity_eftp", "estimated_ftp")
+            ),
+            "max_heart_rate": number(
+                first_value(latest_wellness, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
+                or deep_first_value(athlete_profile, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
+            ),
             "training_load": latest_activity.get("training_load"),
         }
 
@@ -303,12 +345,17 @@ class IntervalsClient:
         trend = []
         for row in wellness:
             row_date = first_value(row, "id", "date")
+            fitness = number(first_value(row, "ctl", "fitness", "icu_ctl"))
+            fatigue = number(first_value(row, "atl", "fatigue", "icu_atl"))
+            form = number(first_value(row, "tsb", "form", "icu_tsb", "freshness"))
+            if form is None and fitness is not None and fatigue is not None:
+                form = round(fitness - fatigue, 2)
             trend.append(
                 {
                     "date": row_date,
-                    "fitness": number(first_value(row, "ctl", "fitness", "icu_ctl")),
-                    "fatigue": number(first_value(row, "atl", "fatigue", "icu_atl")),
-                    "form": number(first_value(row, "tsb", "form", "icu_tsb")),
+                    "fitness": fitness,
+                    "fatigue": fatigue,
+                    "form": form,
                     "weight": number(first_value(row, "weight", "body_mass", "mass")),
                     "ftp": number(first_value(row, "ftp", "threshold_power")),
                     "eftp": number(first_value(row, "eftp", "eftp", "estimated_ftp")),
@@ -322,6 +369,23 @@ def first_value(data: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in data and data[key] not in (None, ""):
             return data[key]
+    return None
+
+
+def deep_first_value(data: Any, *keys: str) -> Any:
+    if isinstance(data, dict):
+        for key in keys:
+            if key in data and data[key] not in (None, ""):
+                return data[key]
+        for value in data.values():
+            found = deep_first_value(value, *keys)
+            if found not in (None, ""):
+                return found
+    elif isinstance(data, list):
+        for value in data:
+            found = deep_first_value(value, *keys)
+            if found not in (None, ""):
+                return found
     return None
 
 
