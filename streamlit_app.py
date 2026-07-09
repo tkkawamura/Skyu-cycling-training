@@ -22,41 +22,26 @@ load_dotenv()
 def main() -> None:
     st.set_page_config(page_title="自転車トレーニング評価JSON", layout="wide")
     st.title("自転車トレーニング評価JSONジェネレーター")
-    st.caption("Intervals.icuのコンディション指標とFIT解析をまとめて、ChatGPT貼り付け用テキストを作成します。")
 
-    st.info(
-        "このアプリはOpenAI APIを呼びません。ChatGPTに貼り付けるためのテキストを生成します。"
-    )
-
-    with st.sidebar:
-        st.header("設定")
-        lookback_days = st.number_input("取得期間（日）", min_value=1, max_value=180, value=int_setting("LOOKBACK_DAYS", 21))
-
-    intervals_snapshot = load_intervals_snapshot(int(lookback_days))
+    lookback_days = int_setting("LOOKBACK_DAYS", 21)
+    intervals_snapshot = load_intervals_snapshot(lookback_days)
     render_startup_intervals_snapshot(intervals_snapshot)
     metrics = (intervals_snapshot.get("payload") or {}).get("metrics") or {}
 
-    with st.sidebar:
-        cp_default = int(metrics.get("ftp") or int_setting("ATHLETE_CRITICAL_POWER_W", 250))
-        body_mass_default = float(metrics.get("weight") or float_setting("ATHLETE_BODY_MASS_KG", 63.0))
-        max_hr_default = int(metrics.get("max_heart_rate") or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
-        cp = st.number_input("基準パワー CP/FTP (W)", min_value=0, max_value=800, value=cp_default)
-        body_mass = st.number_input("体重 (kg)", min_value=0.0, max_value=200.0, value=body_mass_default)
-        max_hr = st.number_input("最大心拍数 (bpm)", min_value=0, max_value=240, value=max_hr_default)
-        w_prime = st.number_input("W' (kJ)", min_value=0.0, max_value=80.0, value=float_setting("ATHLETE_W_PRIME_KJ", 0.0))
-        rpe_options = ["未入力"] + list(range(1, 11))
-        pre_rpe = st.selectbox("ライド前RPE", rpe_options, index=0)
-        post_rpe = st.selectbox("ライド後RPE", rpe_options, index=0)
-        subjective_note = st.text_area("メモ", value="", placeholder="睡眠、疲労感、補給、脚の感覚など")
-        include_prompt = st.checkbox("ChatGPT用プロンプトを含める", value=True)
-        allow_manual_fit = st.checkbox("FIT/JSON手動アップロードを使う", value=True)
+    cp = int(metrics.get("ftp") or int_setting("ATHLETE_CRITICAL_POWER_W", 250))
+    body_mass = float(metrics.get("weight") or float_setting("ATHLETE_BODY_MASS_KG", 63.0))
+    max_hr = int(metrics.get("max_heart_rate") or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
+    w_prime = float_setting("ATHLETE_W_PRIME_KJ", 0.0)
+
+    st.subheader("主観入力")
+    rpe_options = ["未入力"] + list(range(1, 11))
+    rpe_cols = st.columns(2)
+    pre_rpe = rpe_cols[0].selectbox("ライド前RPE", rpe_options, index=0)
+    post_rpe = rpe_cols[1].selectbox("ライド後RPE", rpe_options, index=0)
+    subjective_note = st.text_area("メモ", value="", placeholder="睡眠、疲労感、補給、脚の感覚など")
 
     uploaded_file = None
-    if allow_manual_fit:
-        st.markdown(
-            "必要な場合だけ、Intervals.icuのアクティビティ画面 → データ → オリジナルFITファイル から取得した `.fit` をアップロードしてください。"
-        )
-        uploaded_file = st.file_uploader("オリジナルFITファイルまたは生成済みJSON", type=["fit", "json"])
+    uploaded_file = st.file_uploader("FITファイルまたは生成済みJSON（自動取得できない場合のみ）", type=["fit", "json"])
 
     if st.button("ChatGPT貼り付け用テキストを生成", type="primary", use_container_width=True):
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
@@ -75,7 +60,7 @@ def main() -> None:
                     "subjective_note": subjective_note.strip() or None,
                 },
                 intervals_snapshot=intervals_snapshot,
-                include_prompt=include_prompt,
+                include_prompt=True,
             )
         render_context(context)
 
@@ -282,13 +267,13 @@ def render_context(context: dict[str, Any]) -> None:
     render_metrics(metrics)
 
     st.subheader("最新ライド")
-    st.table(compact_latest_ride(latest))
+    st.dataframe(compact_latest_ride(latest), hide_index=True, use_container_width=True)
 
     fit_context = context.get("fit_activity_context")
     if fit_context:
         st.subheader("FIT解析")
         st.success("詳細なFIT解析情報をChatGPT貼り付け用テキストに含めました。")
-        st.table(compact_fit_summary(fit_context))
+        st.dataframe(compact_fit_summary(fit_context), hide_index=True, use_container_width=True)
     else:
         st.warning("詳細なFIT解析情報は含まれていません。自動取得に失敗した場合は、FITファイルをアップロードしてください。")
 
@@ -312,7 +297,7 @@ def render_metrics(metrics: dict[str, Any]) -> None:
     cols = st.columns(7)
     cols[0].metric("フィットネス", display(metrics.get("fitness")))
     cols[1].metric("ファティーグ", display(metrics.get("fatigue")))
-    cols[2].metric("フォーム", display(metrics.get("form")))
+    cols[2].metric("フォーム", display(metrics.get("form"), "%"))
     cols[3].metric("体重", display(metrics.get("weight"), "kg"))
     cols[4].metric("FTP", display(metrics.get("ftp"), "W"))
     cols[5].metric("eFTP", display(metrics.get("eftp"), "W"))
@@ -322,36 +307,96 @@ def render_metrics(metrics: dict[str, Any]) -> None:
 def compact_latest_ride(latest: dict[str, Any]) -> list[dict[str, Any]]:
     if not latest:
         return [{"項目": "状態", "値": "最新ライド情報なし"}]
-    labels = {
-        "date": "日付",
-        "name": "名前",
-        "type": "種目",
-        "moving_time": "移動時間(秒)",
-        "distance": "距離(m)",
-        "training_load": "トレーニング負荷",
-        "average_watts": "平均パワー(W)",
-        "weighted_average_watts": "正規化/加重パワー(W)",
-        "average_heartrate": "平均心拍(bpm)",
-    }
-    return [{"項目": label, "値": latest.get(key)} for key, label in labels.items() if latest.get(key) not in (None, "")]
+    rows = [
+        ("日付", format_date(latest.get("date"))),
+        ("名前", latest.get("name")),
+        ("移動時間", format_minutes(latest.get("moving_time"))),
+        ("距離", format_km(latest.get("distance"))),
+        ("トレーニング負荷", format_tss(latest.get("training_load"))),
+        ("平均パワー", format_int_unit(latest.get("average_watts"), "W")),
+        ("正規化/加重パワー", format_int_unit(latest.get("weighted_average_watts"), "W")),
+        ("平均心拍", format_int_unit(latest.get("average_heartrate"), "bpm")),
+    ]
+    return [{"項目": label, "値": value} for label, value in rows if value not in (None, "")]
 
 
 def compact_fit_summary(fit_context: dict[str, Any]) -> list[dict[str, Any]]:
     summary = ((fit_context or {}).get("llm_summary") or {}).get("session_summary") or {}
-    labels = {
-        "duration_s": "時間(秒)",
-        "distance_m": "距離(m)",
-        "total_work_kj": "仕事量(kJ)",
-        "mean_power_w": "平均パワー(W)",
-        "weighted_power_w": "加重パワー(W)",
-        "intensity_ratio": "強度比",
-        "session_load_score": "負荷スコア",
-        "mean_heart_rate_bpm": "平均心拍(bpm)",
-        "mean_cadence_rpm": "平均ケイデンス(rpm)",
-    }
     if not summary:
         return [{"項目": "状態", "値": "FIT解析サマリーなし"}]
-    return [{"項目": label, "値": summary.get(key)} for key, label in labels.items() if summary.get(key) not in (None, "")]
+    rows = [
+        ("時間", format_minutes(summary.get("duration_s"))),
+        ("距離", format_km(summary.get("distance_m"))),
+        ("仕事量", format_int_unit(summary.get("total_work_kj"), "kJ")),
+        ("平均パワー", format_int_unit(summary.get("mean_power_w"), "W")),
+        ("加重パワー", format_int_unit(summary.get("weighted_power_w"), "W")),
+        ("強度比", format_decimal(summary.get("intensity_ratio"), 2)),
+        ("負荷スコア", format_int(summary.get("session_load_score"))),
+        ("平均心拍", format_int_unit(summary.get("mean_heart_rate_bpm"), "bpm")),
+        ("平均ケイデンス", format_int_unit(summary.get("mean_cadence_rpm"), "rpm")),
+    ]
+    return [{"項目": label, "値": value} for label, value in rows if value not in (None, "")]
+
+
+def format_date(value: Any) -> str | None:
+    if not value:
+        return None
+    text = str(value).split("T")[0]
+    try:
+        return datetime.fromisoformat(text).strftime("%Y/%m/%d")
+    except ValueError:
+        return text.replace("-", "/")
+
+
+def format_minutes(value: Any) -> str | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    return f"{round(number_value / 60):.0f}分"
+
+
+def format_km(value: Any) -> str | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    return f"{number_value / 1000:.1f}km"
+
+
+def format_tss(value: Any) -> str | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    return f"{round(number_value):.0f} TSS"
+
+
+def format_int_unit(value: Any, unit: str) -> str | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    return f"{round(number_value):.0f}{unit}"
+
+
+def format_int(value: Any) -> str | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    return f"{round(number_value):.0f}"
+
+
+def format_decimal(value: Any, digits: int) -> str | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    return f"{number_value:.{digits}f}"
+
+
+def to_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def render_copy_box(text: str) -> None:

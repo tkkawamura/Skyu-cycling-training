@@ -297,6 +297,7 @@ class IntervalsClient:
             "decoupling": number(first_value(detail, "decoupling", "icu_decoupling")),
             "interval_count": len(detail.get("icu_intervals") or []),
             "external_id": first_value(detail, "external_id", "strava_id", "garmin_id"),
+            "form": number(first_value(detail, "form", "tsb", "icu_tsb", "freshness")),
             "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "eftp": number(first_value(detail, "eftp", "activity_eftp", "estimated_ftp")),
             "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
@@ -314,14 +315,22 @@ class IntervalsClient:
         athlete_profile = athlete_profile or {}
         fitness = number(first_value(latest_wellness, "ctl", "fitness", "icu_ctl"))
         fatigue = number(first_value(latest_wellness, "atl", "fatigue", "icu_atl"))
-        form = number(first_value(latest_wellness, "tsb", "form", "icu_tsb", "freshness"))
+        native_form = number(
+            first_value(latest_wellness, "form", "tsb", "icu_tsb", "freshness")
+            or first_value(latest_activity, "form", "tsb", "icu_tsb", "freshness")
+            or deep_first_value(athlete_profile, "form", "tsb", "icu_tsb", "freshness")
+        )
+        form = native_form
+        form_source = "intervals_native" if native_form is not None else None
         if form is None and fitness is not None and fatigue is not None:
             form = round(fitness - fatigue, 2)
+            form_source = "computed_fitness_minus_fatigue"
         return {
             "date": first_value(latest_wellness, "id", "date") or latest_activity.get("date"),
             "fitness": fitness,
             "fatigue": fatigue,
             "form": form,
+            "form_source": form_source,
             "weight": number(first_value(latest_wellness, "weight", "body_mass", "mass") or first_value(athlete_profile, "weight", "body_mass", "mass")),
             "ftp": number(
                 first_value(latest_wellness, "ftp", "threshold_power", "power_threshold", "icu_ftp")
@@ -347,15 +356,19 @@ class IntervalsClient:
             row_date = first_value(row, "id", "date")
             fitness = number(first_value(row, "ctl", "fitness", "icu_ctl"))
             fatigue = number(first_value(row, "atl", "fatigue", "icu_atl"))
-            form = number(first_value(row, "tsb", "form", "icu_tsb", "freshness"))
+            native_form = number(first_value(row, "form", "tsb", "icu_tsb", "freshness"))
+            form = native_form
+            form_source = "intervals_native" if native_form is not None else None
             if form is None and fitness is not None and fatigue is not None:
                 form = round(fitness - fatigue, 2)
+                form_source = "computed_fitness_minus_fatigue"
             trend.append(
                 {
                     "date": row_date,
                     "fitness": fitness,
                     "fatigue": fatigue,
                     "form": form,
+                    "form_source": form_source,
                     "weight": number(first_value(row, "weight", "body_mass", "mass")),
                     "ftp": number(first_value(row, "ftp", "threshold_power")),
                     "eftp": number(first_value(row, "eftp", "eftp", "estimated_ftp")),
