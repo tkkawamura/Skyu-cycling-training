@@ -39,6 +39,9 @@ def main() -> None:
         include_prompt = st.checkbox("Include ChatGPT prompt", value=True)
         allow_manual_fit = st.checkbox("Allow manual FIT upload fallback", value=True)
 
+    intervals_snapshot = load_intervals_snapshot(int(lookback_days))
+    render_startup_intervals_snapshot(intervals_snapshot)
+
     uploaded_file = None
     if allow_manual_fit:
         st.markdown(
@@ -61,18 +64,13 @@ def main() -> None:
                     "rpe_0_10": float(rpe) if rpe else None,
                     "subjective_note": subjective_note.strip() or None,
                 },
+                intervals_snapshot=intervals_snapshot,
                 include_prompt=include_prompt,
             )
         render_context(context)
 
 
-def generate_context(
-    lookback_days: int,
-    athlete: AthleteInputs,
-    uploaded_file: Any,
-    manual_inputs: dict[str, Any],
-    include_prompt: bool,
-) -> dict[str, Any]:
+def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
     today = date.today()
     oldest = today - timedelta(days=lookback_days)
     data_dir = "data"
@@ -85,16 +83,50 @@ def generate_context(
             download_fit=bool_setting("FIT_DOWNLOAD", True),
         )
     )
-    builder = FitActivityContextBuilder(athlete)
-
     warnings = []
     try:
-        intervals_payload = intervals_client.collect_dashboard(oldest=oldest, newest=today)
-        intervals_source = "intervals"
+        payload = intervals_client.collect_dashboard(oldest=oldest, newest=today)
+        source = "intervals"
     except IntervalsError as exc:
-        intervals_payload = intervals_client.sample_dashboard(oldest=oldest, newest=today)
-        intervals_source = "sample"
+        payload = intervals_client.sample_dashboard(oldest=oldest, newest=today)
+        source = "sample"
         warnings.append(str(exc))
+    return {
+        "payload": payload,
+        "source": source,
+        "warnings": warnings,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetch_timing": "streamlit_app_session_start_or_rerun_before_json_generation",
+    }
+
+
+def render_startup_intervals_snapshot(snapshot: dict[str, Any]) -> None:
+    metrics = (snapshot.get("payload") or {}).get("metrics") or {}
+    if snapshot.get("source") == "sample":
+        st.warning("Intervals.icu metrics are sample data because live fetch failed.")
+    st.caption(f"Intervals.icu snapshot fetched at {snapshot.get('fetched_at')}")
+    cols = st.columns(6)
+    cols[0].metric("Fitness", display(metrics.get("fitness")))
+    cols[1].metric("Fatigue", display(metrics.get("fatigue")))
+    cols[2].metric("Form", display(metrics.get("form")))
+    cols[3].metric("Weight", display(metrics.get("weight"), "kg"))
+    cols[4].metric("FTP", display(metrics.get("ftp"), "W"))
+    cols[5].metric("eFTP", display(metrics.get("eftp"), "W"))
+
+
+def generate_context(
+    lookback_days: int,
+    athlete: AthleteInputs,
+    uploaded_file: Any,
+    manual_inputs: dict[str, Any],
+    intervals_snapshot: dict[str, Any],
+    include_prompt: bool,
+) -> dict[str, Any]:
+    builder = FitActivityContextBuilder(athlete)
+
+    intervals_payload = intervals_snapshot.get("payload") or {}
+    intervals_source = intervals_snapshot.get("source")
+    warnings = list(intervals_snapshot.get("warnings") or [])
 
     fit_context = None
     fit_source = None
@@ -118,6 +150,9 @@ def generate_context(
 
     intervals_context = {
         "source": intervals_source,
+        "fetched_at": intervals_snapshot.get("fetched_at"),
+        "fetch_timing": intervals_snapshot.get("fetch_timing"),
+        "condition_metrics_purpose": "These Intervals.icu values are fetched automatically at app load/rerun and should be used as the condition baseline for the ride review.",
         "metrics": intervals_payload.get("metrics"),
         "latest_ride": sanitize_latest_ride(intervals_payload.get("latest_ride")),
         "trend": intervals_payload.get("trend"),
@@ -140,6 +175,7 @@ def generate_context(
             "openai_api_called": False,
             "warnings": warnings,
         },
+        "review_prompt": build_chatgpt_prompt(),
         "athlete_inputs": {
             "critical_power_w": athlete.critical_power_w,
             "body_mass_kg": athlete.body_mass_kg,
@@ -152,7 +188,7 @@ def generate_context(
         "fit_activity_context": fit_context,
         "uploaded_json_context": uploaded_json_context if uploaded_json_context and fit_context is None else None,
         "chatgpt_usage": {
-            "instruction": "Upload this JSON to ChatGPT and ask for a cycling training review.",
+            "instruction": "Copy this JSON to ChatGPT. Use review_prompt as the base instruction.",
             "recommended_prompt": build_chatgpt_prompt() if include_prompt else None,
         },
     }
@@ -271,28 +307,37 @@ def build_paste_text(context: dict[str, Any]) -> str:
 
 def build_chatgpt_prompt() -> str:
     return (
-        "あなたは持久系パフォーマンスコーチです。添付JSONだけを根拠に、"
-        "自転車トレーニングの日本語レビューを作成してください。\n\n"
-        "必ず確認する項目:\n"
-        "- llm_review_summary\n"
-        "- intervals_icu.metrics の Fitness / Fatigue / Form / weight / FTP / eFTP\n"
-        "- intervals_icu.latest_ride\n"
-        "- fit_activity_context.llm_summary.metric_presence\n"
-        "- fit_activity_context.llm_summary.data_presence_matrix\n"
-        "- fit_activity_context.activity / physiology / segments\n\n"
-        "ルール:\n"
-        "- JSONにない事実は推測で補わないでください。\n"
-        "- available の指標だけ評価に使ってください。\n"
-        "- missing / removed / not_applicable / null / sample_count=0 は評価根拠にしないでください。\n"
-        "- 医療診断ではなくトレーニング上の示唆に限定してください。\n\n"
-        "出力:\n"
-        "1. 総評\n"
-        "2. 今日のライド評価\n"
-        "3. コンディション評価\n"
-        "4. 良かった点\n"
-        "5. 改善点\n"
-        "6. 次回メニュー案\n"
-        "7. 判断できないこと\n"
+        "あなたは持久系パフォーマンスコーチです。\n"
+        "このJSON内のFIT解析情報を主な根拠に、アスリート本人向けの日本語レビューを作成してください。\n"
+        "このアプリのJSONでは、FIT解析JSONは `fit_activity_context` に格納されています。\n"
+        "`intervals_icu.metrics` のフィットネス、ファティーグ、フォーム、体重、FTP、eFTPは、アプリ起動/再実行時に自動取得されたコンディション前提として必ず確認し、ライド結果の評価に反映してください。\n"
+        "`manual_inputs` にRPEやメモがあれば、本人の主観情報として使ってください。\n\n"
+        "共通の読み取りルール:\n"
+        "- このJSONだけを根拠にし、JSON内にない事実は推測で補わないでください。\n"
+        "- まず `intervals_icu.metrics` の Fitness / Fatigue / Form / weight / FTP / eFTP を確認し、コンディション前提を把握してください。\n"
+        "- まず `fit_activity_context.llm_summary.metric_presence`, `fit_activity_context.llm_summary.data_presence_matrix`, `fit_activity_context.llm_summary.available_metrics` を確認し、評価に使える指標を確定してください。\n"
+        "- 詳細値の真値は `fit_activity_context.activity`, `fit_activity_context.physiology`, `fit_activity_context.signals`, `fit_activity_context.segments` にあります。`llm_summary` は索引・要約として使ってください。\n"
+        "- 主要work intervalは `fit_activity_context.segments.auto_interval_segments`、user/device lapは `fit_activity_context.segments.user_lap_segments` を確認してください。\n"
+        "- auto interval と user lap の対応は `fit_activity_context.llm_summary.interval_lap_comparison` を参照してください。\n"
+        "- `available` の値だけを評価に使ってください。`missing`, `removed`, `not_applicable`, `null`, `sample_count = 0` は推測で補わないでください。\n"
+        "- `has_pedaling_dynamics` が true でも、個別指標が null / missing / sample_count 0 なら、その個別指標は使わないでください。\n"
+        "- W′関連値はモデル推定として扱い、実測値のように断定しないでください。\n"
+        "- CPは入力基準値であり、条件やポジションにより実効値が異なる可能性があります。\n"
+        "- 単一アクティビティから、長期適応、疲労蓄積、ピーキングは断定しないでください。\n"
+        "- 医療・診断ではなく、トレーニング上の示唆に限定してください。\n"
+        "- 表と短い箇条書きを使い、要点を短く伝えてください。\n\n"
+        "出力順:\n"
+        "1. 結論\n"
+        "2. セッション構造\n"
+        "3. 主要区間表\n"
+        "4. 指標別評価\n"
+        "5. 良かった点\n"
+        "6. 改善点\n"
+        "7. 次回提案\n"
+        "8. 判断できないこと\n"
+        "9. 追加で必要な情報\n\n"
+        "主要区間表には、区間ID、時間、duration、mean/weighted power、HR、cadence/speed、W′、pedaling dynamics有無を、利用可能な範囲で入れてください。\n"
+        "簡単な図解が有効なら、ASCIIの時間軸や短い模式図で示してください。"
     )
 
 
