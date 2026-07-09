@@ -337,26 +337,22 @@ class IntervalsClient:
             "form_source": form_source,
             "weight": self._latest_wellness_number(
                 wellness,
-                ("weight", "weight_kg", "body_mass", "bodyMass", "body_weight", "mass", "Weight"),
-                max_date=ride_date,
+                ("weight", "weight_kg", "weightKg", "body_mass", "bodyMass", "body_weight", "mass", "Weight"),
             ) or number(deep_first_value(athlete_profile, "weight", "weight_kg", "body_mass", "bodyMass", "body_weight", "mass")),
             "resting_heart_rate": number(
                 self._latest_wellness_number(
                     wellness,
                     ("resting_hr", "resting_heartrate", "resting_heart_rate", "restingHR", "restingHeartRate", "restingHeartrate", "rhr"),
-                    max_date=ride_date,
                 )
                 or deep_first_value(athlete_profile, "resting_hr", "resting_heartrate", "resting_heart_rate", "restingHR", "restingHeartRate", "rhr")
             ),
             "sleep_score": self._latest_wellness_number(
                 wellness,
                 ("sleep_score", "sleepScore", "sleep_quality", "sleepQuality", "sleep_score_percent", "sleepScorePercent", "sleep_rating", "sleepRating"),
-                max_date=ride_date,
             ),
             "hrv": self._latest_wellness_number(
                 wellness,
                 ("hrv", "hrv_rmssd", "hrvRmssd", "hrvRMSSD", "rmssd", "HRV", "hrv_sdnn", "hrvSDNN", "sdnn"),
-                max_date=ride_date,
             ),
             "ftp": number(
                 first_value(latest_wellness, "ftp", "threshold_power", "power_threshold", "icu_ftp")

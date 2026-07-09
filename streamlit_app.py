@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-pre-ride-baseline-v2"
+APP_VERSION = "2026-07-10-pre-ride-baseline-v3"
 
 
 def main() -> None:
