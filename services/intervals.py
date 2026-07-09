@@ -403,7 +403,7 @@ class IntervalsClient:
         candidates = []
         for row in wellness:
             row_date = parse_date(first_value(row, "id", "date"))
-            if row_date and row_date < ride_date:
+            if row_date and row_date <= ride_date:
                 candidates.append((row_date, row))
         if not candidates:
             return {}
