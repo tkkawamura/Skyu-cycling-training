@@ -129,16 +129,20 @@ class IntervalsClient:
         paths = self._fit_download_paths(activity, detail)
         attempted = []
         for path in paths:
-            try:
-                attempted.append(path)
-                response = self._request("GET", path, params={"format": "fit", "original": "true"})
-                content = self._extract_fit_bytes(response)
-                if content:
-                    target.write_bytes(content)
-                    return str(target), {"source": "intervals_auto_download", "path": path, "attempted": attempted}
-            except IntervalsError as exc:
-                attempted.append(f"{path} -> {exc}")
-                continue
+            for label, params in (
+                ("original_fit", {"format": "fit", "original": "true"}),
+                ("intervals_fit", {"format": "fit"}),
+            ):
+                try:
+                    attempted.append(f"{path} ({label})")
+                    response = self._request("GET", path, params=params)
+                    content = self._extract_fit_bytes(response)
+                    if content:
+                        target.write_bytes(content)
+                        return str(target), {"source": label, "path": path, "attempted": attempted}
+                except IntervalsError as exc:
+                    attempted.append(f"{path} ({label}) -> {exc}")
+                    continue
         return None, {"source": "not_found", "attempted": attempted}
 
     def _fit_download_paths(self, activity: dict[str, Any], detail: dict[str, Any] | None) -> list[str]:
@@ -162,6 +166,7 @@ class IntervalsClient:
             "original.fit",
             "original",
             "original-file",
+            "fit",
             "fit-file",
             "file.fit",
             "file",
@@ -297,6 +302,8 @@ class IntervalsClient:
             "decoupling": number(first_value(detail, "decoupling", "icu_decoupling")),
             "interval_count": len(detail.get("icu_intervals") or []),
             "external_id": first_value(detail, "external_id", "strava_id", "garmin_id"),
+            "fitness": number(deep_first_value(detail, "start_ctl", "ctl_start", "ctl_before", "pre_ctl", "fitness_before", "fitness_start", "icu_ctl_start", "icu_ctl_before")),
+            "fatigue": number(deep_first_value(detail, "start_atl", "atl_start", "atl_before", "pre_atl", "fatigue_before", "fatigue_start", "icu_atl_start", "icu_atl_before")),
             "form": number(first_value(detail, "form", "tsb", "icu_tsb", "freshness")),
             "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
@@ -314,11 +321,13 @@ class IntervalsClient:
         athlete_profile = athlete_profile or {}
         pre_ride_wellness = self._pre_ride_wellness(wellness, latest_ride)
         baseline_wellness = pre_ride_wellness or latest_wellness
-        ride_date = parse_date((latest_ride or {}).get("date"))
-        fitness = number(first_value(baseline_wellness, "ctl", "fitness", "icu_ctl"))
-        fatigue = number(first_value(baseline_wellness, "atl", "fatigue", "icu_atl"))
+        activity_fitness = number(first_value(latest_activity, "fitness", "ctl_before", "pre_ctl", "start_ctl"))
+        activity_fatigue = number(first_value(latest_activity, "fatigue", "atl_before", "pre_atl", "start_atl"))
+        fitness = activity_fitness if activity_fitness is not None else number(first_value(baseline_wellness, "ctl", "fitness", "icu_ctl"))
+        fatigue = activity_fatigue if activity_fatigue is not None else number(first_value(baseline_wellness, "atl", "fatigue", "icu_atl"))
         native_form = number(
-            first_value(baseline_wellness, "form", "tsb", "icu_tsb", "freshness")
+            first_value(latest_activity, "form_before", "pre_form", "start_form")
+            or first_value(baseline_wellness, "form", "tsb", "icu_tsb", "freshness")
             or first_value(latest_activity, "form", "tsb", "icu_tsb", "freshness")
             or deep_first_value(athlete_profile, "form", "tsb", "icu_tsb", "freshness")
         )
@@ -329,7 +338,7 @@ class IntervalsClient:
             form_source = "computed_fitness_minus_fatigue"
         return {
             "date": first_value(latest_wellness, "id", "date") or latest_activity.get("date"),
-            "condition_baseline": "pre_ride" if pre_ride_wellness else "latest_available",
+            "condition_baseline": "activity_pre_ride" if activity_fitness is not None or activity_fatigue is not None else ("previous_wellness_before_ride" if pre_ride_wellness else "latest_available"),
             "condition_baseline_date": first_value(baseline_wellness, "id", "date"),
             "fitness": fitness,
             "fatigue": fatigue,
@@ -403,7 +412,7 @@ class IntervalsClient:
         candidates = []
         for row in wellness:
             row_date = parse_date(first_value(row, "id", "date"))
-            if row_date and row_date <= ride_date:
+            if row_date and row_date < ride_date:
                 candidates.append((row_date, row))
         if not candidates:
             return {}
@@ -460,6 +469,11 @@ def deep_first_value(data: Any, *keys: str) -> Any:
         for key in keys:
             if key in data and data[key] not in (None, ""):
                 return data[key]
+        normalized = {normalize_key(str(key)): value for key, value in data.items()}
+        for key in keys:
+            value = normalized.get(normalize_key(key))
+            if value not in (None, ""):
+                return value
         for value in data.values():
             found = deep_first_value(value, *keys)
             if found not in (None, ""):
