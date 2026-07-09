@@ -237,6 +237,14 @@ def render_context(context: dict[str, Any]) -> None:
         st.warning("Detailed FIT context is not included. Upload a FIT file or generated JSON to include the attached-style analysis.")
 
     json_text = json.dumps(context, ensure_ascii=False, indent=2)
+    paste_text = build_paste_text(context)
+    st.subheader("Copy & Paste to ChatGPT")
+    st.text_area(
+        "Copy this text and paste it into ChatGPT",
+        value=paste_text,
+        height=360,
+        help="iPhoneでは欄内を長押しして全選択、コピーしてChatGPTへ貼り付けてください。",
+    )
     st.download_button(
         "Download JSON for ChatGPT",
         data=json_text,
@@ -247,6 +255,18 @@ def render_context(context: dict[str, Any]) -> None:
 
     st.subheader("JSON Preview")
     st.json(context, expanded=False)
+
+
+def build_paste_text(context: dict[str, Any]) -> str:
+    compact_json = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    prompt = context.get("chatgpt_usage", {}).get("recommended_prompt") or build_chatgpt_prompt()
+    return (
+        f"{prompt}\n\n"
+        "以下が評価対象のJSONです。\n"
+        "```json\n"
+        f"{compact_json}\n"
+        "```"
+    )
 
 
 def build_chatgpt_prompt() -> str:
