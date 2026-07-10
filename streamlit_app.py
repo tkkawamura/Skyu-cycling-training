@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-compact-markdown-output-v1"
+APP_VERSION = "2026-07-10-rpe-number-input-v1"
 
 
 def main() -> None:
@@ -40,10 +40,9 @@ def main() -> None:
     w_prime = float_setting("ATHLETE_W_PRIME_KJ", 0.0)
 
     st.subheader("主観入力")
-    rpe_options = ["未入力"] + list(range(1, 11))
     rpe_cols = st.columns(2)
-    pre_rpe = rpe_cols[0].selectbox("ライド前RPE", rpe_options, index=0)
-    post_rpe = rpe_cols[1].selectbox("ライド後RPE", rpe_options, index=0)
+    pre_rpe = rpe_cols[0].number_input("ライド前RPE", min_value=1, max_value=10, value=None, step=1, placeholder="1〜10")
+    post_rpe = rpe_cols[1].number_input("ライド後RPE", min_value=1, max_value=10, value=None, step=1, placeholder="1〜10")
     subjective_note = st.text_area("メモ", value="", placeholder="睡眠、疲労感、補給、脚の感覚など")
 
     uploaded_file = None
@@ -61,8 +60,8 @@ def main() -> None:
                 ),
                 uploaded_file=uploaded_file,
                 manual_inputs={
-                    "pre_ride_rpe_1_10": None if pre_rpe == "未入力" else int(pre_rpe),
-                    "post_ride_rpe_1_10": None if post_rpe == "未入力" else int(post_rpe),
+                    "pre_ride_rpe_1_10": int(pre_rpe) if pre_rpe is not None else None,
+                    "post_ride_rpe_1_10": int(post_rpe) if post_rpe is not None else None,
                     "subjective_note": subjective_note.strip() or None,
                 },
                 intervals_snapshot=intervals_snapshot,
