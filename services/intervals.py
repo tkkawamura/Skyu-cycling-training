@@ -191,8 +191,14 @@ class IntervalsClient:
             generated.extend(
                 [
                     f"/api/v1/activity/{activity_id}.fit",
+                    f"/api/v1/activity/{activity_id}/file",
+                    f"/api/v1/activity/{activity_id}/file.fit",
                     f"/api/v1/activity/{activity_id}/files/fit",
                     f"/api/v1/activity/{activity_id}/files/original",
+                    f"/api/v1/athlete/{self.athlete_id}/activity/{activity_id}/fit",
+                    f"/api/v1/athlete/{self.athlete_id}/activity/{activity_id}/file",
+                    f"/api/v1/athlete/{self.athlete_id}/activities/{activity_id}/fit",
+                    f"/api/v1/athlete/{self.athlete_id}/activities/{activity_id}/file",
                     f"/api/activity/{activity_id}.fit",
                     f"/api/activities/{activity_id}.fit",
                 ]
@@ -286,12 +292,12 @@ class IntervalsClient:
             "start_time": start_time,
             "name": first_value(item, "name", "Name", "filename") or "Ride",
             "type": first_value(item, "type", "sport", "Type") or "Ride",
-            "moving_time": number(first_value(item, "moving_time", "Moving Time")),
-            "distance": number(first_value(item, "distance", "Distance")),
-            "training_load": number(first_value(item, "icu_training_load", "training_load", "Load")),
-            "average_watts": number(first_value(item, "average_watts", "Average Watts")),
-            "weighted_average_watts": number(first_value(item, "weighted_average_watts", "Weighted Average Watts", "power")),
-            "average_heartrate": number(first_value(item, "average_heartrate", "Average Heart Rate")),
+            "moving_time": number(first_value(item, "moving_time", "Moving Time", "elapsed_time", "elapsedTime", "duration", "moving_time_secs", "total_timer_time", "totalTimerTime")),
+            "distance": normalize_distance_m(first_value(item, "distance", "Distance", "distance_m", "distanceMeters", "distance_meters", "total_distance", "totalDistance")),
+            "training_load": number(first_value(item, "icu_training_load", "icuTrainingLoad", "training_load", "trainingLoad", "load", "Load", "tss", "TSS")),
+            "average_watts": number(first_value(item, "average_watts", "averageWatts", "Average Watts", "avg_power", "avgPower")),
+            "weighted_average_watts": number(first_value(item, "weighted_average_watts", "weightedAverageWatts", "Weighted Average Watts", "normalized_power", "normalizedPower", "power")),
+            "average_heartrate": number(first_value(item, "average_heartrate", "averageHeartrate", "average_heart_rate", "avg_hr", "avgHr", "Average Heart Rate")),
             "fitness": number(first_value(item, "fitness", "ctl", "icu_ctl", "start_ctl", "ctl_start", "ctl_before", "pre_ctl")),
             "fatigue": number(first_value(item, "fatigue", "atl", "icu_atl", "start_atl", "atl_start", "atl_before", "pre_atl")),
             "form": number(first_value(item, "form", "tsb", "icu_tsb", "freshness", "start_form", "form_start", "form_before", "pre_form")),
@@ -300,20 +306,40 @@ class IntervalsClient:
         }
 
     def _find_latest_ride(self, activities: list[dict[str, Any]]) -> dict[str, Any] | None:
+        ride_candidates = []
         for activity in activities:
             sport = str(activity.get("type", "")).lower()
             if "ride" in sport or "cycling" in sport or "bike" in sport:
-                return activity
-        return activities[0] if activities else None
+                ride_candidates.append(activity)
+        candidates = ride_candidates or activities
+        if not candidates:
+            return None
+
+        latest_date = max(str(item.get("date") or "") for item in candidates)
+        same_day = [item for item in candidates if str(item.get("date") or "") == latest_date]
+
+        def completed_score(item: dict[str, Any]) -> tuple[float, float, float, str]:
+            return (
+                float(number(item.get("training_load")) or 0),
+                float(number(item.get("distance")) or 0),
+                float(number(item.get("moving_time")) or 0),
+                str(item.get("start_time") or item.get("date") or ""),
+            )
+
+        return sorted(same_day, key=completed_score, reverse=True)[0]
 
     def _summarize_activity_detail(self, detail: dict[str, Any] | None) -> dict[str, Any]:
         if not detail:
             return {}
-        return {
-            "training_load": number(first_value(detail, "icu_training_load", "training_load")),
-            "average_watts": number(first_value(detail, "average_watts")),
-            "weighted_average_watts": number(first_value(detail, "weighted_average_watts")),
-            "average_heartrate": number(first_value(detail, "average_heartrate")),
+        summary = {
+            "name": first_value(detail, "name", "filename"),
+            "type": first_value(detail, "type", "sport"),
+            "moving_time": number(first_value(detail, "moving_time", "elapsed_time", "elapsedTime", "duration", "moving_time_secs", "total_timer_time", "totalTimerTime")),
+            "distance": normalize_distance_m(first_value(detail, "distance", "distance_m", "distanceMeters", "distance_meters", "total_distance", "totalDistance")),
+            "training_load": number(first_value(detail, "icu_training_load", "icuTrainingLoad", "training_load", "trainingLoad", "load", "tss", "TSS")),
+            "average_watts": number(first_value(detail, "average_watts", "averageWatts", "avg_power", "avgPower")),
+            "weighted_average_watts": number(first_value(detail, "weighted_average_watts", "weightedAverageWatts", "normalized_power", "normalizedPower")),
+            "average_heartrate": number(first_value(detail, "average_heartrate", "averageHeartrate", "average_heart_rate", "avg_hr", "avgHr")),
             "decoupling": number(first_value(detail, "decoupling", "icu_decoupling")),
             "interval_count": len(detail.get("icu_intervals") or []),
             "external_id": first_value(detail, "external_id", "strava_id", "garmin_id"),
@@ -323,6 +349,7 @@ class IntervalsClient:
             "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
         }
+        return {key: value for key, value in summary.items() if value not in (None, "")}
 
     def _latest_metrics(
         self,
@@ -338,11 +365,18 @@ class IntervalsClient:
         baseline_wellness = same_day_wellness or latest_wellness
         activity_fitness = number(first_value(latest_activity, "fitness", "ctl_before", "pre_ctl", "start_ctl"))
         activity_fatigue = number(first_value(latest_activity, "fatigue", "atl_before", "pre_atl", "start_atl"))
-        fitness = activity_fitness if activity_fitness is not None else number(first_value(baseline_wellness, "ctl", "fitness", "icu_ctl"))
-        fatigue = activity_fatigue if activity_fatigue is not None else number(first_value(baseline_wellness, "atl", "fatigue", "icu_atl"))
+        post_fitness = number(first_value(baseline_wellness, "ctl", "fitness", "icu_ctl"))
+        post_fatigue = number(first_value(baseline_wellness, "atl", "fatigue", "icu_atl"))
+        training_load = number(latest_activity.get("training_load"))
+        estimated_pre_ride = self._estimate_pre_ride_condition(post_fitness, post_fatigue, training_load)
+        estimated_fitness = estimated_pre_ride.get("fitness")
+        estimated_fatigue = estimated_pre_ride.get("fatigue")
+        fitness = activity_fitness if activity_fitness is not None else (estimated_fitness if estimated_fitness is not None else post_fitness)
+        fatigue = activity_fatigue if activity_fatigue is not None else (estimated_fatigue if estimated_fatigue is not None else post_fatigue)
+        activity_form = number(first_value(latest_activity, "form_before", "pre_form", "start_form"))
         native_form = number(
-            first_value(latest_activity, "form", "form_before", "pre_form", "start_form")
-            or first_value(baseline_wellness, "form", "tsb", "icu_tsb", "freshness")
+            activity_form
+            or (None if estimated_pre_ride else first_value(baseline_wellness, "form", "tsb", "icu_tsb", "freshness"))
             or deep_first_value(athlete_profile, "form", "tsb", "icu_tsb", "freshness")
         )
         form = native_form
@@ -350,14 +384,20 @@ class IntervalsClient:
         if form is None and fitness is not None and fatigue is not None:
             form = round(fitness - fatigue, 2)
             form_source = "computed_fitness_minus_fatigue"
+        condition_baseline = "activity_value"
+        if activity_fitness is None and activity_fatigue is None:
+            condition_baseline = "estimated_pre_ride_from_same_day_wellness_and_tss" if estimated_pre_ride else ("same_day_wellness" if same_day_wellness else "latest_available")
         return {
             "date": first_value(latest_wellness, "id", "date") or latest_activity.get("date"),
-            "condition_baseline": "activity_value" if activity_fitness is not None or activity_fatigue is not None else ("same_day_wellness" if same_day_wellness else "latest_available"),
+            "condition_baseline": condition_baseline,
             "condition_baseline_date": first_value(baseline_wellness, "id", "date"),
             "fitness": fitness,
             "fatigue": fatigue,
             "form": form,
             "form_source": form_source,
+            "post_ride_fitness": post_fitness,
+            "post_ride_fatigue": post_fatigue,
+            "pre_ride_estimation_method": estimated_pre_ride.get("method"),
             "weight": self._latest_wellness_number(
                 wellness,
                 ("weight", "weight_kg", "weightKg", "body_mass", "bodyMass", "body_weight", "mass", "Weight"),
@@ -386,7 +426,7 @@ class IntervalsClient:
                 first_value(latest_wellness, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
                 or deep_first_value(athlete_profile, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
             ),
-            "training_load": latest_activity.get("training_load"),
+            "training_load": training_load,
         }
 
     def _build_trend(self, wellness: list[dict[str, Any]], activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -428,6 +468,23 @@ class IntervalsClient:
             if row_date == ride_date:
                 return row
         return {}
+
+    def _estimate_pre_ride_condition(
+        self,
+        post_fitness: float | int | None,
+        post_fatigue: float | int | None,
+        training_load: float | int | None,
+    ) -> dict[str, Any]:
+        if training_load is None:
+            return {}
+        estimate: dict[str, Any] = {"method": "reverse_intervals_pmc_from_same_day_tss"}
+        if post_fitness is not None:
+            estimate["fitness"] = round((float(post_fitness) - (float(training_load) / 42.0)) / (41.0 / 42.0), 2)
+        if post_fatigue is not None:
+            estimate["fatigue"] = round((float(post_fatigue) - (float(training_load) / 7.0)) / (6.0 / 7.0), 2)
+        if len(estimate) == 1:
+            return {}
+        return estimate
 
     def _latest_wellness_number(
         self,
@@ -530,6 +587,15 @@ def number(value: Any) -> float | int | None:
     if result.is_integer():
         return int(result)
     return round(result, 2)
+
+
+def normalize_distance_m(value: Any) -> float | int | None:
+    result = number(value)
+    if result is None:
+        return None
+    if 0 < float(result) < 500:
+        return round(float(result) * 1000, 2)
+    return result
 
 
 def find_fit_paths(data: Any) -> list[str]:
