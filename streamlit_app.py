@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-rpe-number-input-v1"
+APP_VERSION = "2026-07-10-available-metrics-fix-v1"
 
 
 def main() -> None:
@@ -734,7 +734,7 @@ def build_review_markdown(context: dict[str, Any]) -> str:
 
     available = fit_llm.get("available_metrics") or []
     if available:
-        lines.extend(["", "## 利用可能な指標", ", ".join(str(item) for item in available[:40])])
+        lines.extend(["", "## 利用可能な指標", ", ".join(format_available_metrics(available)[:40])])
 
     presence = fit_llm.get("metric_presence")
     if presence:
@@ -794,6 +794,22 @@ def markdown_interval_table(intervals: Any) -> list[str]:
             )
         )
     return rows
+
+
+def format_available_metrics(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, dict):
+        output = []
+        for key, item in value.items():
+            if isinstance(item, list):
+                output.extend(f"{key}.{child}" for child in item)
+            elif isinstance(item, dict):
+                output.extend(f"{key}.{child}" for child, present in item.items() if present)
+            elif item:
+                output.append(str(key))
+        return output
+    return [str(value)]
 
 
 def first_existing(data: Any, *keys: str) -> Any:
