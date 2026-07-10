@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-markdown-interval-metrics-v1"
+APP_VERSION = "2026-07-10-decoupling-wbal-v2"
 
 
 def main() -> None:
@@ -168,6 +168,8 @@ def generate_context(
         metrics["max_heart_rate"] = athlete.max_heart_rate_bpm
     if metrics.get("ftp") is None and athlete.critical_power_w:
         metrics["ftp"] = athlete.critical_power_w
+    if athlete.w_prime_kj:
+        metrics["w_prime_capacity"] = athlete.w_prime_kj
 
     intervals_context = {
         "source": intervals_source,
@@ -337,6 +339,9 @@ def compact_segments(items: Any, limit: int) -> list[dict[str, Any]]:
                 "power": item.get("power"),
                 "heart_rate": item.get("heart_rate"),
                 "movement": item.get("movement"),
+                "w_prime": item.get("w_prime"),
+                "w_prime_balance": item.get("w_prime_balance"),
+                "wbal": item.get("wbal"),
                 "classification": item.get("classification"),
                 "metric_presence": item.get("metric_presence"),
             }
@@ -383,6 +388,9 @@ def build_review_summary(
             "hrv": metrics.get("hrv"),
             "ftp": metrics.get("ftp"),
             "max_heart_rate": metrics.get("max_heart_rate"),
+            "w_prime_capacity": metrics.get("w_prime_capacity"),
+            "w_prime_balance": metrics.get("w_prime_balance"),
+            "w_prime_balance_drop": metrics.get("w_prime_balance_drop"),
             "training_load": metrics.get("training_load"),
         },
         "latest_ride": latest_ride,
@@ -440,6 +448,8 @@ def render_metrics(metrics: dict[str, Any]) -> None:
         ("睡眠スコア", display(metrics.get("sleep_score"))),
         ("HRV", display(metrics.get("hrv"), "ms")),
         ("FTP", display(metrics.get("ftp"), "W")),
+        ("W′設定最大", display(metrics.get("w_prime_capacity"), "kJ")),
+        ("W′bal", display_wbal(metrics)),
         ("最大心拍", display(metrics.get("max_heart_rate"), "bpm")),
     ]
     html = ['<div class="metric-grid">']
@@ -685,6 +695,7 @@ def build_review_markdown(context: dict[str, Any]) -> str:
     metrics = intervals.get("metrics") or {}
     ride = intervals.get("latest_ride") or {}
     manual = context.get("manual_inputs") or {}
+    athlete_inputs = context.get("athlete_inputs") or {}
     fit = context.get("fit_activity_context") or {}
     fit_llm = (fit.get("llm_summary") or {}) if isinstance(fit, dict) else {}
     session = fit_llm.get("session_summary") or {}
@@ -708,6 +719,8 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"|睡眠スコア|{display(metrics.get('sleep_score'))}|",
         f"|HRV|{display(metrics.get('hrv'), 'ms')}|",
         f"|FTP|{display(metrics.get('ftp'), 'W')}|",
+        f"|W′設定最大|{display(athlete_inputs.get('w_prime_kj'), 'kJ')}|",
+        f"|W′bal|{display_wbal(metrics)}|",
         f"|最大心拍|{display(metrics.get('max_heart_rate'), 'bpm')}|",
         f"|基準|{display(metrics.get('condition_baseline'))} / {display(metrics.get('condition_baseline_date'))}|",
         "",
@@ -748,9 +761,12 @@ def build_review_markdown(context: dict[str, Any]) -> str:
 
 
 def markdown_interval_table(intervals: Any) -> list[str]:
-    rows = ["|ID|役割|時間|平均/加重P|HR|ケイデンス/速度|W'|PD|", "|---|---|---:|---:|---:|---:|---:|---|"]
+    rows = [
+        "|ID|役割|時間|平均/加重P|HR|ケイデンス/速度|EF/デカップリング|W'|PD|",
+        "|---|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
     if not isinstance(intervals, list) or not intervals:
-        rows.append("|-|主要区間なし|-|-|-|-|-|-|")
+        rows.append("|-|主要区間なし|-|-|-|-|-|-|-|")
         return rows
     for item in intervals[:10]:
         if not isinstance(item, dict):
@@ -759,7 +775,7 @@ def markdown_interval_table(intervals: Any) -> list[str]:
         hr = item.get("heart_rate") or {}
         move = item.get("movement") or {}
         rows.append(
-            "|{id}|{role}|{dur}|{power}|{hr}|{move}|{wbal}|{pd}|".format(
+            "|{id}|{role}|{dur}|{power}|{hr}|{move}|{decoupling}|{wbal}|{pd}|".format(
                 id=display(item.get("segment_id") or item.get("id")),
                 role=display(item.get("segment_role") or item.get("role")),
                 dur=format_minutes(item.get("duration_s")) or display(item.get("duration_s")),
@@ -790,7 +806,8 @@ def markdown_interval_table(intervals: Any) -> list[str]:
                     if value
                 )
                 or "-",
-                wbal=display(first_existing(item, "w_prime_balance", "wbal")),
+                decoupling=format_efficiency_decoupling(item, hr),
+                wbal=display_interval_wbal(item),
                 pd="あり" if item.get("has_pedaling_dynamics") else "なし",
             )
         )
@@ -829,6 +846,56 @@ def format_unit(value: Any, unit: str) -> str | None:
     return f"{value}{unit}"
 
 
+def display_wbal(metrics: dict[str, Any]) -> str:
+    parts = []
+    balance = format_int_unit(metrics.get("w_prime_balance"), "kJ")
+    drop = format_int_unit(metrics.get("w_prime_balance_drop"), "kJ")
+    if balance:
+        parts.append(balance)
+    if drop:
+        parts.append(f"drop {drop}")
+    return " / ".join(parts) if parts else "-"
+
+
+def display_interval_wbal(item: dict[str, Any]) -> str:
+    w_prime = item.get("w_prime") or {}
+    if not isinstance(w_prime, dict):
+        w_prime = {}
+    values = [
+        format_int_unit(first_existing(w_prime, "min_kj", "minimum_kj", "min_balance_kj"), "kJ"),
+        format_int_unit(first_existing(w_prime, "end_kj", "ending_kj", "end_balance_kj"), "kJ"),
+        format_int_unit(first_existing(item, "w_prime_balance", "wbal", "wbal_kj"), "kJ"),
+    ]
+    values = [value for value in values if value]
+    return "/".join(values) if values else "-"
+
+
+def format_efficiency_decoupling(item: dict[str, Any], heart_rate: dict[str, Any]) -> str:
+    ef = format_decimal(
+        first_existing(heart_rate, "efficiency_factor_w_per_bpm", "efficiency_factor", "ef")
+        or first_existing(item, "efficiency_factor_w_per_bpm", "efficiency_factor", "ef"),
+        2,
+    )
+    decoupling = format_percent(
+        first_existing(heart_rate, "decoupling_pct", "decoupling_percent", "decoupling")
+        or first_existing(item, "decoupling_pct", "decoupling_percent", "decoupling"),
+        1,
+    )
+    parts = []
+    if ef:
+        parts.append(f"EF {ef}")
+    if decoupling:
+        parts.append(f"Dec {decoupling}")
+    return " / ".join(parts) if parts else "-"
+
+
+def format_percent(value: Any, digits: int) -> str | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    return f"{number_value:.{digits}f}%"
+
+
 def build_chatgpt_prompt() -> str:
     return (
         "あなたは持久系パフォーマンスコーチです。\n"
@@ -837,7 +904,8 @@ def build_chatgpt_prompt() -> str:
         "RPEとメモは本人の主観情報として扱ってください。\n\n"
         "読み取りルール:\n"
         "- データ内にない事実は推測で補わないでください。\n"
-        "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォームを評価の前提に利用してください。\n"
+        "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
+        "- W′は設定最大値、最低W′bal、W′ドロップ、残量を比較し、高強度でどこまで掘れたか、どれだけ余ったかを評価してください。\n"
         "- 利用可能な指標と指標の有無を先に確認し、使える値だけで評価してください。\n"
         "- missing / removed / not_applicable / null / sample_count=0 の指標は使わないでください。\n"
         "- W′関連値はモデル推定として扱い、実測値のように断定しないでください。\n"
@@ -854,7 +922,7 @@ def build_chatgpt_prompt() -> str:
         "7. 次回提案\n"
         "8. 判断できないこと\n"
         "9. 追加で必要な情報\n\n"
-        "主要区間表には、区間ID、時間、mean/weighted power、HR、cadence/speed、W′、pedaling dynamics有無を、利用可能な範囲で入れてください。"
+        "主要区間表には、区間ID、時間、mean/weighted power、HR、cadence/speed、EF/デカップリング、W′、pedaling dynamics有無を、利用可能な範囲で入れてください。"
     )
 
 

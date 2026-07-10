@@ -16,6 +16,42 @@ class IntervalsError(RuntimeError):
     pass
 
 
+W_PRIME_BALANCE_KEYS = (
+    "w_prime_balance",
+    "wPrimeBalance",
+    "w_prime_bal",
+    "wPrimeBal",
+    "wbal",
+    "wBal",
+    "w_bal",
+    "w_prime_balance_kj",
+    "wPrimeBalanceKj",
+    "wbal_kj",
+    "wBalKj",
+    "w_prime_remaining",
+    "wPrimeRemaining",
+    "w_prime_remaining_kj",
+    "wPrimeRemainingKj",
+    "wbal_remaining_kj",
+    "wBalRemainingKj",
+)
+
+W_PRIME_DROP_KEYS = (
+    "w_prime_drop",
+    "wPrimeDrop",
+    "w_prime_drop_kj",
+    "wPrimeDropKj",
+    "w_prime_balance_drop",
+    "wPrimeBalanceDrop",
+    "w_prime_balance_drop_kj",
+    "wPrimeBalanceDropKj",
+    "wbal_drop",
+    "wBalDrop",
+    "wbal_drop_kj",
+    "wBalDropKj",
+)
+
+
 @dataclass
 class IntervalsConfig:
     api_key: str
@@ -309,6 +345,8 @@ class IntervalsClient:
             "form": number(first_value(item, "form", "tsb", "icu_tsb", "freshness", "start_form", "form_start", "form_before", "pre_form")),
             "ftp": number(first_value(item, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(item, "max_hr", "max_heartrate", "max_heart_rate", "Max Heart Rate")),
+            "w_prime_balance": number(first_value(item, *W_PRIME_BALANCE_KEYS)),
+            "w_prime_balance_drop": number(first_value(item, *W_PRIME_DROP_KEYS)),
         }
 
     def _find_latest_ride(self, activities: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -354,6 +392,8 @@ class IntervalsClient:
             "form": number(deep_first_value(detail, "start_form", "form_start", "form_before", "pre_form", "form", "tsb", "icu_tsb", "freshness")),
             "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
+            "w_prime_balance": number(deep_first_value(detail, *W_PRIME_BALANCE_KEYS)),
+            "w_prime_balance_drop": number(deep_first_value(detail, *W_PRIME_DROP_KEYS)),
         }
         return {key: value for key, value in summary.items() if value not in (None, "")}
 
@@ -432,6 +472,18 @@ class IntervalsClient:
                 first_value(latest_wellness, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
                 or deep_first_value(athlete_profile, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
             ),
+            "w_prime_balance": number(
+                first_value(latest_activity, *W_PRIME_BALANCE_KEYS)
+                or first_value(baseline_wellness, *W_PRIME_BALANCE_KEYS)
+                or first_value(latest_wellness, *W_PRIME_BALANCE_KEYS)
+                or deep_first_value(athlete_profile, *W_PRIME_BALANCE_KEYS)
+            ),
+            "w_prime_balance_drop": number(
+                first_value(latest_activity, *W_PRIME_DROP_KEYS)
+                or first_value(baseline_wellness, *W_PRIME_DROP_KEYS)
+                or first_value(latest_wellness, *W_PRIME_DROP_KEYS)
+                or deep_first_value(athlete_profile, *W_PRIME_DROP_KEYS)
+            ),
             "training_load": training_load,
         }
 
@@ -460,6 +512,8 @@ class IntervalsClient:
                     "sleep_score": number(first_value(row, "sleep_score", "sleepScore", "sleep_quality", "sleepQuality")),
                     "hrv": number(first_value(row, "hrv", "hrv_rmssd", "rmssd", "HRV")),
                     "ftp": number(first_value(row, "ftp", "threshold_power")),
+                    "w_prime_balance": number(first_value(row, *W_PRIME_BALANCE_KEYS)),
+                    "w_prime_balance_drop": number(first_value(row, *W_PRIME_DROP_KEYS)),
                     "training_load": load_by_date.get(row_date, 0),
                 }
             )
