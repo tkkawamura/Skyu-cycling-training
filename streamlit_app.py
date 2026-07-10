@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-available-metrics-fix-v1"
+APP_VERSION = "2026-07-10-condition-prompt-v1"
 
 
 def main() -> None:
@@ -830,11 +830,11 @@ def build_chatgpt_prompt() -> str:
         "RPEとメモは本人の主観情報として扱ってください。\n\n"
         "読み取りルール:\n"
         "- データ内にない事実は推測で補わないでください。\n"
+        "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォームを評価の前提に利用してください。\n"
         "- 利用可能な指標と指標の有無を先に確認し、使える値だけで評価してください。\n"
         "- missing / removed / not_applicable / null / sample_count=0 の指標は使わないでください。\n"
         "- W′関連値はモデル推定として扱い、実測値のように断定しないでください。\n"
         "- CPは入力基準値であり、条件やポジションにより実効値が異なる可能性があります。\n"
-        "- 単一アクティビティから、長期適応、疲労蓄積、ピーキングは断定しないでください。\n"
         "- 医療・診断ではなく、トレーニング上の示唆に限定してください。\n"
         "- 表と短い箇条書きを使い、要点を短く伝えてください。\n\n"
         "出力順:\n"
