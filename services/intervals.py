@@ -51,6 +51,23 @@ W_PRIME_DROP_KEYS = (
     "wBalDropKj",
 )
 
+W_PRIME_CAPACITY_KEYS = (
+    "w_prime",
+    "wPrime",
+    "w_prime_kj",
+    "wPrimeKj",
+    "w_prime_capacity",
+    "wPrimeCapacity",
+    "w_prime_capacity_kj",
+    "wPrimeCapacityKj",
+    "w_prime_j",
+    "wPrimeJ",
+    "w_prime_capacity_j",
+    "wPrimeCapacityJ",
+    "w_prime_ftp",
+    "wPrimeFtp",
+)
+
 
 @dataclass
 class IntervalsConfig:
@@ -345,6 +362,7 @@ class IntervalsClient:
             "form": number(first_value(item, "form", "tsb", "icu_tsb", "freshness", "start_form", "form_start", "form_before", "pre_form")),
             "ftp": number(first_value(item, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(item, "max_hr", "max_heartrate", "max_heart_rate", "Max Heart Rate")),
+            "w_prime_capacity": normalize_w_prime_kj(first_value(item, *W_PRIME_CAPACITY_KEYS)),
             "w_prime_balance": number(first_value(item, *W_PRIME_BALANCE_KEYS)),
             "w_prime_balance_drop": number(first_value(item, *W_PRIME_DROP_KEYS)),
         }
@@ -392,6 +410,7 @@ class IntervalsClient:
             "form": number(deep_first_value(detail, "start_form", "form_start", "form_before", "pre_form", "form", "tsb", "icu_tsb", "freshness")),
             "ftp": number(first_value(detail, "ftp", "athlete_ftp", "icu_ftp", "threshold_power")),
             "max_heart_rate": number(first_value(detail, "max_hr", "max_heartrate", "max_heart_rate")),
+            "w_prime_capacity": normalize_w_prime_kj(deep_first_value(detail, *W_PRIME_CAPACITY_KEYS)),
             "w_prime_balance": number(deep_first_value(detail, *W_PRIME_BALANCE_KEYS)),
             "w_prime_balance_drop": number(deep_first_value(detail, *W_PRIME_DROP_KEYS)),
         }
@@ -472,6 +491,11 @@ class IntervalsClient:
                 first_value(latest_wellness, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
                 or deep_first_value(athlete_profile, "max_hr", "max_heart_rate", "max_heartrate", "hr_max")
             ),
+            "w_prime_capacity": normalize_w_prime_kj(
+                first_value(latest_activity, *W_PRIME_CAPACITY_KEYS)
+                or first_value(latest_wellness, *W_PRIME_CAPACITY_KEYS)
+                or deep_first_value(athlete_profile, *W_PRIME_CAPACITY_KEYS)
+            ),
             "w_prime_balance": number(
                 first_value(latest_activity, *W_PRIME_BALANCE_KEYS)
                 or first_value(baseline_wellness, *W_PRIME_BALANCE_KEYS)
@@ -512,6 +536,7 @@ class IntervalsClient:
                     "sleep_score": number(first_value(row, "sleep_score", "sleepScore", "sleep_quality", "sleepQuality")),
                     "hrv": number(first_value(row, "hrv", "hrv_rmssd", "rmssd", "HRV")),
                     "ftp": number(first_value(row, "ftp", "threshold_power")),
+                    "w_prime_capacity": normalize_w_prime_kj(first_value(row, *W_PRIME_CAPACITY_KEYS)),
                     "w_prime_balance": number(first_value(row, *W_PRIME_BALANCE_KEYS)),
                     "w_prime_balance_drop": number(first_value(row, *W_PRIME_DROP_KEYS)),
                     "training_load": load_by_date.get(row_date, 0),
@@ -655,6 +680,15 @@ def normalize_distance_m(value: Any) -> float | int | None:
         return None
     if 0 < float(result) < 500:
         return round(float(result) * 1000, 2)
+    return result
+
+
+def normalize_w_prime_kj(value: Any) -> float | int | None:
+    result = number(value)
+    if result is None:
+        return None
+    if float(result) > 200:
+        return round(float(result) / 1000, 2)
     return result
 
 

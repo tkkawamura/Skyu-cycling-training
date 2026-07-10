@@ -32,6 +32,7 @@ class FitActivityContextBuilder:
         auto_segments = self._auto_segments(records, load)
         user_laps = self._user_lap_segments(records, laps, load)
         interval_lap_comparison = self._interval_lap_comparison(auto_segments, user_laps)
+        w_prime_series = self._w_prime_balance_series(records)
         duration_curves = self._duration_curves(records)
         distributions = self._distributions(records)
         metric_presence = self._metric_presence(records, auto_segments, user_laps, duration_curves)
@@ -125,7 +126,7 @@ class FitActivityContextBuilder:
                 "load": load,
                 "data_quality": self._data_quality(records),
             },
-            "physiology": self._physiology(records),
+            "physiology": self._physiology(records, w_prime_series),
             "signals": {
                 "distributions": distributions,
                 "duration_curves": duration_curves,
@@ -372,7 +373,7 @@ class FitActivityContextBuilder:
         return rows
 
     def _duration_curves(self, records: list[dict[str, Any]]) -> dict[str, Any]:
-        durations = [5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+        durations = [1, 5, 10, 15, 30, 45, 60, 120, 180, 300, 600, 1200, 1800, 2700, 3600, 5400]
         return {
             "power": curve(records, "power", durations),
             "heart_rate": curve(records, "heart_rate", durations),
@@ -491,10 +492,11 @@ class FitActivityContextBuilder:
             "user_lap_segments": [compact(seg) for seg in laps],
         }
 
-    def _physiology(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+    def _physiology(self, records: list[dict[str, Any]], w_prime_series: dict[str, Any]) -> dict[str, Any]:
         cp = self.athlete.critical_power_w
         powers = values(records, "power")
         above = [p for p in powers if cp and p > cp]
+        w_prime_summary = w_prime_series.get("summary") if isinstance(w_prime_series, dict) else {}
         return {
             "critical_power": {
                 "critical_power_w": cp,
@@ -502,16 +504,69 @@ class FitActivityContextBuilder:
                 "time_above_cp_s": len(above) if cp else None,
                 "work_above_cp_kj": round_or_none(sum(p - cp for p in above) / 1000, 1) if cp else None,
                 "severe_domain_bout_count": count_bouts([p > cp for p in powers]) if cp else None,
-                "estimated_min_reserve_balance_kj": None,
+                "estimated_min_reserve_balance_kj": w_prime_summary.get("min_balance_kj"),
                 "notes": [] if self.athlete.w_prime_kj else ["w_prime_kj not provided"],
             },
             "w_prime_balance": {
                 "schema_version": "w_prime_balance.v1",
-                "method": "critical_power_summary_only",
+                "method": w_prime_series.get("method", "critical_power_summary_only") if isinstance(w_prime_series, dict) else "critical_power_summary_only",
                 "inputs": {"critical_power_w": cp, "w_prime_kj": self.athlete.w_prime_kj, "point_step_s": 1},
-                "summary": {"min_balance_kj": None, "min_balance_pct": None, "end_balance_kj": None},
+                "summary": {
+                    "min_balance_kj": w_prime_summary.get("min_balance_kj"),
+                    "min_balance_pct": w_prime_summary.get("min_balance_pct"),
+                    "end_balance_kj": w_prime_summary.get("end_balance_kj"),
+                    "end_balance_pct": w_prime_summary.get("end_balance_pct"),
+                    "total_depletion_kj": w_prime_summary.get("total_depletion_kj"),
+                    "total_recovery_kj": w_prime_summary.get("total_recovery_kj"),
+                    "time_below_20pct_s": w_prime_summary.get("time_below_20pct_s"),
+                },
                 "points": "removed",
             },
+        }
+
+    def _w_prime_balance_series(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        cp = self.athlete.critical_power_w
+        w_prime_kj = self.athlete.w_prime_kj
+        powers = values(records, "power")
+        if not cp or not w_prime_kj or not powers:
+            return {
+                "method": "critical_power_w_prime_balance_preliminary",
+                "summary": {},
+                "notes": ["critical_power_w or w_prime_kj not provided"],
+            }
+
+        balance = float(w_prime_kj)
+        min_balance = balance
+        total_depletion = 0.0
+        total_recovery = 0.0
+        below_20 = 0
+        tau_s = 546.0
+        for power in powers:
+            if power > cp:
+                delta = (power - cp) / 1000.0
+                balance = max(0.0, balance - delta)
+                total_depletion += delta
+            else:
+                recovery = (float(w_prime_kj) - balance) * (1.0 - math.exp(-1.0 / tau_s))
+                balance = min(float(w_prime_kj), balance + recovery)
+                total_recovery += recovery
+            min_balance = min(min_balance, balance)
+            if balance <= float(w_prime_kj) * 0.2:
+                below_20 += 1
+
+        return {
+            "method": "critical_power_w_prime_balance_preliminary_exponential_recovery",
+            "summary": {
+                "capacity_kj": round_or_none(w_prime_kj, 1),
+                "min_balance_kj": round_or_none(min_balance, 1),
+                "min_balance_pct": round_or_none(min_balance / float(w_prime_kj) * 100, 1),
+                "end_balance_kj": round_or_none(balance, 1),
+                "end_balance_pct": round_or_none(balance / float(w_prime_kj) * 100, 1),
+                "total_depletion_kj": round_or_none(total_depletion, 1),
+                "total_recovery_kj": round_or_none(total_recovery, 1),
+                "time_below_20pct_s": below_20,
+            },
+            "points": "removed",
         }
 
     def _coach_context(self, load: dict[str, Any], intervals: list[dict[str, Any]]) -> dict[str, Any]:

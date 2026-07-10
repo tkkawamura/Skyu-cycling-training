@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-decoupling-wbal-v2"
+APP_VERSION = "2026-07-10-markdown-full-coach-context-v1"
 
 
 def main() -> None:
@@ -37,7 +37,7 @@ def main() -> None:
     cp = int(metrics.get("ftp") or int_setting("ATHLETE_CRITICAL_POWER_W", 250))
     body_mass = float(metrics.get("weight") or float_setting("ATHLETE_BODY_MASS_KG", 63.0))
     max_hr = int(metrics.get("max_heart_rate") or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
-    w_prime = float_setting("ATHLETE_W_PRIME_KJ", 0.0)
+    w_prime = float(metrics.get("w_prime_capacity") or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
     st.subheader("主観入力")
     rpe_cols = st.columns(2)
@@ -293,6 +293,13 @@ def build_compact_fit_context(fit_context: dict[str, Any] | None) -> dict[str, A
                 "w_prime_balance": None,
             },
         ),
+        "signals": pick_nested(
+            fit_context.get("signals") or {},
+            {
+                "duration_curves": None,
+                "distributions": None,
+            },
+        ),
         "llm_summary": {
             "session_summary": llm.get("session_summary"),
             "key_intervals": limit_list(llm.get("key_intervals"), 8),
@@ -342,6 +349,7 @@ def compact_segments(items: Any, limit: int) -> list[dict[str, Any]]:
                 "w_prime": item.get("w_prime"),
                 "w_prime_balance": item.get("w_prime_balance"),
                 "wbal": item.get("wbal"),
+                "pedaling_dynamics": item.get("pedaling_dynamics"),
                 "classification": item.get("classification"),
                 "metric_presence": item.get("metric_presence"),
             }
@@ -576,17 +584,25 @@ def compact_latest_ride(latest: dict[str, Any]) -> list[dict[str, Any]]:
 
 def compact_fit_summary(fit_context: dict[str, Any]) -> list[dict[str, Any]]:
     summary = ((fit_context or {}).get("llm_summary") or {}).get("session_summary") or {}
+    activity = (fit_context or {}).get("activity") or {}
+    load = activity.get("load") or {}
+    activity_summary = activity.get("summary") or {}
     if not summary:
         return [{"項目": "状態", "値": "FIT解析サマリーなし"}]
     rows = [
         ("時間", format_minutes(summary.get("duration_s"))),
         ("距離", format_km(summary.get("distance_m"))),
+        ("獲得標高", format_int_unit(activity_summary.get("total_ascent_m"), "m")),
         ("仕事量", format_int_unit(summary.get("total_work_kj"), "kJ")),
         ("平均パワー", format_int_unit(summary.get("mean_power_w"), "W")),
+        ("最大パワー", format_int_unit(summary.get("max_power_w"), "W")),
         ("加重パワー", format_int_unit(summary.get("weighted_power_w"), "W")),
         ("強度比", format_decimal(summary.get("intensity_ratio"), 2)),
         ("負荷スコア", format_int(summary.get("session_load_score"))),
+        ("20分パワー", format_int_unit(load.get("best_20min_power_w"), "W")),
+        ("20分W/kg", format_decimal(load.get("best_20min_power_to_mass_wkg"), 2)),
         ("平均心拍", format_int_unit(summary.get("mean_heart_rate_bpm"), "bpm")),
+        ("最大心拍", format_int_unit(activity_summary.get("max_heart_rate_bpm"), "bpm")),
         ("平均ケイデンス", format_int_unit(summary.get("mean_cadence_rpm"), "rpm")),
     ]
     return [{"項目": label, "値": value} for label, value in rows if value not in (None, "")]
@@ -607,6 +623,22 @@ def format_minutes(value: Any) -> str | None:
     if number_value is None:
         return None
     return f"{round(number_value / 60):.0f}分"
+
+
+def format_duration_label(seconds: int | float) -> str:
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(round(seconds / 60))}分"
+    return f"{seconds / 3600:.1f}h"
+
+
+def format_time_range(start_s: Any, end_s: Any) -> str:
+    start = to_float(start_s)
+    end = to_float(end_s)
+    if start is None or end is None:
+        return "-"
+    return f"{format_duration_label(start)}-{format_duration_label(end)}"
 
 
 def format_km(value: Any) -> str | None:
@@ -651,6 +683,37 @@ def to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def to_kmh_value(value: Any) -> float | None:
+    number_value = to_float(value)
+    if number_value is None:
+        return None
+    if number_value < 20:
+        return number_value * 3.6
+    return number_value
+
+
+def summarize_histogram(rows: Any, unit: str, limit: int = 12) -> str | None:
+    if not isinstance(rows, list) or not rows:
+        return None
+    total = sum(to_float(row.get("seconds")) or 0 for row in rows if isinstance(row, dict))
+    parts = []
+    for row in rows[:limit]:
+        if not isinstance(row, dict):
+            continue
+        seconds = to_float(row.get("seconds"))
+        if seconds is None:
+            continue
+        pct = seconds / total * 100 if total else None
+        label = f"{format_int(row.get('from'))}-{format_int(row.get('to'))}{unit}"
+        value = f"{round(seconds / 60):.0f}分"
+        if pct is not None:
+            value += f"/{pct:.0f}%"
+        parts.append(f"{label}: {value}")
+    if len(rows) > limit:
+        parts.append(f"他{len(rows) - limit}区間")
+    return ", ".join(parts) if parts else None
 
 
 def render_copy_box(text: str) -> None:
@@ -742,9 +805,39 @@ def build_review_markdown(context: dict[str, Any]) -> str:
     for row in compact_fit_summary(fit):
         lines.append(f"|{row['項目']}|{row['値']}|")
 
+    physiology_lines = markdown_physiology(fit)
+    if physiology_lines:
+        lines.extend(["", "## CP / W′"])
+        lines.extend(physiology_lines)
+
+    curve_lines = markdown_duration_curves(fit)
+    if curve_lines:
+        lines.extend(["", "## Duration Curve 代表点"])
+        lines.extend(curve_lines)
+
+    distribution_lines = markdown_distributions(fit)
+    if distribution_lines:
+        lines.extend(["", "## 分布"])
+        lines.extend(distribution_lines)
+
     fit_segments = (fit.get("segments") or {}) if isinstance(fit, dict) else {}
     lines.extend(["", "## 主要区間"])
     lines.extend(markdown_interval_table(fit_segments.get("auto_interval_segments") or fit_llm.get("key_intervals")))
+
+    lap_lines = markdown_lap_table(fit_segments.get("user_lap_segments") or fit_llm.get("key_laps"))
+    if lap_lines:
+        lines.extend(["", "## User Lap"])
+        lines.extend(lap_lines)
+
+    comparison = fit_llm.get("interval_lap_comparison") or []
+    if comparison:
+        lines.extend(["", "## 区間とLapの対応"])
+        lines.extend(markdown_interval_lap_comparison(comparison))
+
+    coach_lines = markdown_coach_context(fit.get("coach_context") if isinstance(fit, dict) else None)
+    if coach_lines:
+        lines.extend(["", "## Coach Context"])
+        lines.extend(coach_lines)
 
     available = fit_llm.get("available_metrics") or []
     if available:
@@ -760,13 +853,144 @@ def build_review_markdown(context: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def markdown_physiology(fit: dict[str, Any] | None) -> list[str]:
+    physiology = ((fit or {}).get("physiology") or {}) if isinstance(fit, dict) else {}
+    critical = physiology.get("critical_power") or {}
+    wbal = (physiology.get("w_prime_balance") or {}).get("summary") or {}
+    rows = [
+        "|項目|値|",
+        "|---|---:|",
+        f"|CP|{display(critical.get('critical_power_w'), 'W')}|",
+        f"|W′設定最大|{display(critical.get('w_prime_kj'), 'kJ')}|",
+        f"|CP超過時間|{display(critical.get('time_above_cp_s'), '秒')}|",
+        f"|CP超過仕事量|{display(critical.get('work_above_cp_kj'), 'kJ')}|",
+        f"|Severe bout数|{display(critical.get('severe_domain_bout_count'))}|",
+        f"|最低W′bal|{display(wbal.get('min_balance_kj'), 'kJ')} / {display(wbal.get('min_balance_pct'), '%')}|",
+        f"|終了時W′bal|{display(wbal.get('end_balance_kj'), 'kJ')} / {display(wbal.get('end_balance_pct'), '%')}|",
+        f"|W′消費|{display(wbal.get('total_depletion_kj'), 'kJ')}|",
+        f"|W′回復|{display(wbal.get('total_recovery_kj'), 'kJ')}|",
+        f"|W′20%以下時間|{display(wbal.get('time_below_20pct_s'), '秒')}|",
+    ]
+    useful = [row for row in rows[2:] if not row.endswith("|-|") and "|- / -|" not in row]
+    return rows[:2] + useful if useful else []
+
+
+def markdown_duration_curves(fit: dict[str, Any] | None) -> list[str]:
+    curves = (((fit or {}).get("signals") or {}).get("duration_curves") or {}) if isinstance(fit, dict) else {}
+    if not curves:
+        return []
+    metric_labels = {
+        "power": ("パワー", "W"),
+        "heart_rate": ("心拍", "bpm"),
+        "cadence": ("ケイデンス", "rpm"),
+        "velocity": ("速度", "km/h"),
+    }
+    durations = [1, 5, 10, 30, 60, 300, 1200, 3600]
+    rows = ["|時間|パワー|心拍|ケイデンス|速度|", "|---:|---:|---:|---:|---:|"]
+    point_maps = {}
+    for key in metric_labels:
+        points = (curves.get(key) or {}).get("representative_points") or []
+        point_maps[key] = {int(point.get("duration_s")): point.get("best_average") for point in points if point.get("duration_s") is not None}
+    for duration in durations:
+        if not any(duration in point_maps[key] for key in metric_labels):
+            continue
+        rows.append(
+            "|{duration}|{power}|{hr}|{cadence}|{velocity}|".format(
+                duration=format_duration_label(duration),
+                power=format_int_unit(point_maps["power"].get(duration), "W") or "-",
+                hr=format_int_unit(point_maps["heart_rate"].get(duration), "bpm") or "-",
+                cadence=format_int_unit(point_maps["cadence"].get(duration), "rpm") or "-",
+                velocity=format_unit(format_decimal(to_kmh_value(point_maps["velocity"].get(duration)), 1), "km/h") or "-",
+            )
+        )
+    return rows if len(rows) > 2 else []
+
+
+def markdown_distributions(fit: dict[str, Any] | None) -> list[str]:
+    distributions = (((fit or {}).get("signals") or {}).get("distributions") or {}) if isinstance(fit, dict) else {}
+    if not distributions:
+        return []
+    lines = []
+    power = summarize_histogram(distributions.get("power_w"), "W")
+    heart_rate = summarize_histogram(distributions.get("heart_rate_bpm"), "bpm")
+    cadence = summarize_histogram(distributions.get("cadence_rpm"), "rpm")
+    speed = summarize_histogram(distributions.get("speed_kmh"), "km/h")
+    if power:
+        lines.extend(["### パワー分布", power])
+    if heart_rate:
+        lines.extend(["### 心拍分布", heart_rate])
+    if cadence:
+        lines.extend(["### ケイデンス分布", cadence])
+    if speed:
+        lines.extend(["### 速度分布", speed])
+    return lines
+
+
+def markdown_lap_table(laps: Any) -> list[str]:
+    if not isinstance(laps, list) or not laps:
+        return []
+    rows = [
+        "|ID|区間|時間|平均/加重P|CP比|仕事量|HR|ケイデンス/速度|EF/デカップリング|PD|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for item in laps[:8]:
+        if not isinstance(item, dict):
+            continue
+        power = item.get("power") or {}
+        hr = item.get("heart_rate") or {}
+        move = item.get("movement") or {}
+        rows.append(format_segment_row(item, power, hr, move, include_role=False, include_wbal=False))
+    return rows if len(rows) > 2 else []
+
+
+def markdown_interval_lap_comparison(comparison: Any) -> list[str]:
+    if not isinstance(comparison, list) or not comparison:
+        return []
+    rows = ["|区間|Lap|重複|区間平均P|Lap平均P|差|", "|---|---|---:|---:|---:|---:|"]
+    for item in comparison[:8]:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            "|{interval}|{lap}|{overlap}|{ip}|{lp}|{delta}|".format(
+                interval=display(item.get("interval_id")),
+                lap=display(item.get("lap_id")),
+                overlap=format_minutes(item.get("overlap_s")) or display(item.get("overlap_s")),
+                ip=format_int_unit(item.get("interval_mean_power_w"), "W") or "-",
+                lp=format_int_unit(item.get("lap_mean_power_w"), "W") or "-",
+                delta=format_int_unit(item.get("mean_power_delta_w"), "W") or "-",
+            )
+        )
+    return rows
+
+
+def markdown_coach_context(coach_context: Any) -> list[str]:
+    if not isinstance(coach_context, dict) or not coach_context:
+        return []
+    labels = {
+        "session_type_guess": "セッション推定",
+        "main_stimulus": "主刺激",
+        "fatigue_signal": "疲労シグナル",
+        "selected_work_duration_s": "選択work合計",
+        "scope_note": "スコープ",
+    }
+    rows = []
+    for key, label in labels.items():
+        value = coach_context.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if key.endswith("_s"):
+            value = format_minutes(value) or value
+        rows.append(f"- {label}: {value}")
+    return rows
+
+
 def markdown_interval_table(intervals: Any) -> list[str]:
     rows = [
-        "|ID|役割|時間|平均/加重P|HR|ケイデンス/速度|EF/デカップリング|W'|PD|",
-        "|---|---|---:|---:|---:|---:|---:|---:|---|",
+        "|ID|役割|区間|時間|平均/加重P|CP比|仕事量|HR|ケイデンス/速度|EF/デカップリング|W'|分類|PD|",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     if not isinstance(intervals, list) or not intervals:
-        rows.append("|-|主要区間なし|-|-|-|-|-|-|-|")
+        rows.append("|-|主要区間なし|-|-|-|-|-|-|-|-|-|-|-|")
         return rows
     for item in intervals[:10]:
         if not isinstance(item, dict):
@@ -774,44 +998,70 @@ def markdown_interval_table(intervals: Any) -> list[str]:
         power = item.get("power") or {}
         hr = item.get("heart_rate") or {}
         move = item.get("movement") or {}
-        rows.append(
-            "|{id}|{role}|{dur}|{power}|{hr}|{move}|{decoupling}|{wbal}|{pd}|".format(
-                id=display(item.get("segment_id") or item.get("id")),
-                role=display(item.get("segment_role") or item.get("role")),
-                dur=format_minutes(item.get("duration_s")) or display(item.get("duration_s")),
-                power="/".join(
-                    value
-                    for value in [
-                        format_int_unit(first_existing(power, "mean_w", "mean_power_w", "avg_w") or first_existing(item, "mean_power_w", "avg_power_w"), "W"),
-                        format_int_unit(first_existing(power, "weighted_w", "weighted_power_w", "normalized_w") or first_existing(item, "weighted_power_w", "normalized_power_w"), "W"),
-                    ]
-                    if value
-                )
-                or "-",
-                hr="/".join(
-                    value
-                    for value in [
-                        format_int_unit(first_existing(hr, "mean_bpm", "mean_heart_rate_bpm", "avg_bpm") or first_existing(item, "mean_heart_rate_bpm", "avg_heart_rate_bpm"), "bpm"),
-                        format_int_unit(first_existing(hr, "max_bpm", "max_heart_rate_bpm") or first_existing(item, "max_heart_rate_bpm"), "bpm"),
-                    ]
-                    if value
-                )
-                or "-",
-                move="/".join(
-                    value
-                    for value in [
-                        format_int_unit(first_existing(move, "mean_cadence_rpm", "cadence_rpm") or first_existing(item, "mean_cadence_rpm"), "rpm"),
-                        format_unit(format_decimal(first_existing(move, "mean_speed_kmh") or first_existing(item, "mean_speed_kmh"), 1), "km/h"),
-                    ]
-                    if value
-                )
-                or "-",
-                decoupling=format_efficiency_decoupling(item, hr),
-                wbal=display_interval_wbal(item),
-                pd="あり" if item.get("has_pedaling_dynamics") else "なし",
-            )
-        )
+        rows.append(format_segment_row(item, power, hr, move, include_role=True, include_wbal=True))
     return rows
+
+
+def format_segment_row(
+    item: dict[str, Any],
+    power: dict[str, Any],
+    heart_rate: dict[str, Any],
+    movement: dict[str, Any],
+    include_role: bool,
+    include_wbal: bool,
+) -> str:
+    row = {
+        "id": display(item.get("segment_id") or item.get("id")),
+        "role": display(item.get("segment_role") or item.get("role")),
+        "range": format_time_range(item.get("start_s"), item.get("end_s")),
+        "dur": format_minutes(item.get("duration_s")) or display(item.get("duration_s")),
+        "power": "/".join(
+            value
+            for value in [
+                format_int_unit(first_existing(power, "mean_w", "mean_power_w", "avg_w") or first_existing(item, "mean_power_w", "avg_power_w"), "W"),
+                format_int_unit(first_existing(power, "weighted_w", "weighted_power_w", "normalized_w") or first_existing(item, "weighted_power_w", "normalized_power_w"), "W"),
+            ]
+            if value
+        )
+        or "-",
+        "cp": format_decimal(first_existing(power, "cp_ratio") or first_existing(item, "cp_ratio"), 2) or "-",
+        "work": format_int_unit(first_existing(power, "work_kj"), "kJ") or "-",
+        "hr": "/".join(
+            value
+            for value in [
+                format_int_unit(first_existing(heart_rate, "mean_bpm", "mean_heart_rate_bpm", "avg_bpm") or first_existing(item, "mean_heart_rate_bpm", "avg_heart_rate_bpm"), "bpm"),
+                format_int_unit(first_existing(heart_rate, "max_bpm", "max_heart_rate_bpm") or first_existing(item, "max_heart_rate_bpm"), "bpm"),
+            ]
+            if value
+        )
+        or "-",
+        "move": "/".join(
+            value
+            for value in [
+                format_int_unit(first_existing(movement, "mean_cadence_rpm", "cadence_rpm") or first_existing(item, "mean_cadence_rpm"), "rpm"),
+                format_unit(format_decimal(first_existing(movement, "mean_speed_kmh") or first_existing(item, "mean_speed_kmh"), 1), "km/h"),
+            ]
+            if value
+        )
+        or "-",
+        "decoupling": format_efficiency_decoupling(item, heart_rate),
+        "wbal": display_interval_wbal(item),
+        "class": "/".join(
+            value
+            for value in [
+                display(first_existing(item.get("classification") or {}, "effort_type") or item.get("effort_type")),
+                display(first_existing(item.get("classification") or {}, "execution_pattern") or item.get("execution_pattern")),
+            ]
+            if value != "-"
+        )
+        or "-",
+        "pd": "あり" if item.get("has_pedaling_dynamics") else "なし",
+    }
+    if include_role:
+        return "|{id}|{role}|{range}|{dur}|{power}|{cp}|{work}|{hr}|{move}|{decoupling}|{wbal}|{class}|{pd}|".format(**row)
+    if include_wbal:
+        return "|{id}|{range}|{dur}|{power}|{cp}|{work}|{hr}|{move}|{decoupling}|{wbal}|{pd}|".format(**row)
+    return "|{id}|{range}|{dur}|{power}|{cp}|{work}|{hr}|{move}|{decoupling}|{pd}|".format(**row)
 
 
 def format_available_metrics(value: Any) -> list[str]:
