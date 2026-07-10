@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-condition-prompt-v1"
+APP_VERSION = "2026-07-10-markdown-interval-metrics-v1"
 
 
 def main() -> None:
@@ -729,8 +729,9 @@ def build_review_markdown(context: dict[str, Any]) -> str:
     for row in compact_fit_summary(fit):
         lines.append(f"|{row['項目']}|{row['値']}|")
 
+    fit_segments = (fit.get("segments") or {}) if isinstance(fit, dict) else {}
     lines.extend(["", "## 主要区間"])
-    lines.extend(markdown_interval_table(fit_llm.get("key_intervals") or ((fit.get("segments") or {}).get("auto_interval_segments") if isinstance(fit, dict) else [])))
+    lines.extend(markdown_interval_table(fit_segments.get("auto_interval_segments") or fit_llm.get("key_intervals")))
 
     available = fit_llm.get("available_metrics") or []
     if available:
@@ -765,8 +766,8 @@ def markdown_interval_table(intervals: Any) -> list[str]:
                 power="/".join(
                     value
                     for value in [
-                        format_int_unit(first_existing(power, "mean_w", "mean_power_w", "avg_w"), "W"),
-                        format_int_unit(first_existing(power, "weighted_w", "weighted_power_w", "normalized_w"), "W"),
+                        format_int_unit(first_existing(power, "mean_w", "mean_power_w", "avg_w") or first_existing(item, "mean_power_w", "avg_power_w"), "W"),
+                        format_int_unit(first_existing(power, "weighted_w", "weighted_power_w", "normalized_w") or first_existing(item, "weighted_power_w", "normalized_power_w"), "W"),
                     ]
                     if value
                 )
@@ -774,8 +775,8 @@ def markdown_interval_table(intervals: Any) -> list[str]:
                 hr="/".join(
                     value
                     for value in [
-                        format_int_unit(first_existing(hr, "mean_bpm", "mean_heart_rate_bpm", "avg_bpm"), "bpm"),
-                        format_int_unit(first_existing(hr, "max_bpm", "max_heart_rate_bpm"), "bpm"),
+                        format_int_unit(first_existing(hr, "mean_bpm", "mean_heart_rate_bpm", "avg_bpm") or first_existing(item, "mean_heart_rate_bpm", "avg_heart_rate_bpm"), "bpm"),
+                        format_int_unit(first_existing(hr, "max_bpm", "max_heart_rate_bpm") or first_existing(item, "max_heart_rate_bpm"), "bpm"),
                     ]
                     if value
                 )
@@ -783,8 +784,8 @@ def markdown_interval_table(intervals: Any) -> list[str]:
                 move="/".join(
                     value
                     for value in [
-                        format_int_unit(first_existing(move, "mean_cadence_rpm", "cadence_rpm"), "rpm"),
-                        format_km(first_existing(move, "distance_m")),
+                        format_int_unit(first_existing(move, "mean_cadence_rpm", "cadence_rpm") or first_existing(item, "mean_cadence_rpm"), "rpm"),
+                        format_unit(format_decimal(first_existing(move, "mean_speed_kmh") or first_existing(item, "mean_speed_kmh"), 1), "km/h"),
                     ]
                     if value
                 )
@@ -820,6 +821,12 @@ def first_existing(data: Any, *keys: str) -> Any:
         if value not in (None, "", [], {}):
             return value
     return None
+
+
+def format_unit(value: Any, unit: str) -> str | None:
+    if value in (None, ""):
+        return None
+    return f"{value}{unit}"
 
 
 def build_chatgpt_prompt() -> str:
