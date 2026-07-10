@@ -23,6 +23,8 @@ class IntervalsConfig:
     base_url: str = "https://intervals.icu"
     data_dir: str = "data"
     download_fit: bool = True
+    request_timeout_s: int = 8
+    max_fit_attempts: int = 24
 
 
 class IntervalsClient:
@@ -128,6 +130,7 @@ class IntervalsClient:
 
         paths = self._fit_download_paths(activity, detail)
         attempted = []
+        attempt_count = 0
         for path in paths:
             for label, params in (
                 ("original_fit", {"format": "fit", "original": "true"}),
@@ -135,6 +138,9 @@ class IntervalsClient:
                 ("intervals_fit_type", {"type": "fit"}),
                 ("direct_fit", None),
             ):
+                if attempt_count >= self.config.max_fit_attempts:
+                    return None, {"source": "attempt_limit_reached", "attempted": attempted}
+                attempt_count += 1
                 try:
                     attempted.append(f"{path} ({label})")
                     response = self._request("GET", path, params=params) if params else self._request("GET", path)
@@ -259,7 +265,7 @@ class IntervalsClient:
             method,
             url,
             auth=("API_KEY", self.config.api_key),
-            timeout=30,
+            timeout=self.config.request_timeout_s,
             **kwargs,
         )
         if response.status_code >= 400:

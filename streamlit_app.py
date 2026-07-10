@@ -20,7 +20,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-pre-ride-estimate-fit-select-v1"
+APP_VERSION = "2026-07-10-fast-start-fit-on-generate-v1"
 
 
 def main() -> None:
@@ -82,7 +82,9 @@ def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
             athlete_id=str(secret_or_env("INTERVALS_ATHLETE_ID", "0")),
             base_url=secret_or_env("INTERVALS_BASE_URL", "https://intervals.icu"),
             data_dir=data_dir,
-            download_fit=bool_setting("FIT_DOWNLOAD", True),
+            download_fit=False,
+            request_timeout_s=int_setting("INTERVALS_REQUEST_TIMEOUT_S", 8),
+            max_fit_attempts=int_setting("FIT_MAX_ATTEMPTS", 24),
         )
     )
     warnings = []
@@ -142,7 +144,10 @@ def generate_context(
     fit_context = None
     fit_source = None
     uploaded_json_context = None
-    fit_path = intervals_payload.get("fit_path")
+    fit_path = None
+    fit_download_info = None
+    if uploaded_file is None and intervals_source == "intervals":
+        fit_path, fit_download_info = download_fit_on_demand(intervals_payload)
     if fit_path:
         try:
             fit_context = builder.build(fit_path)
@@ -177,7 +182,7 @@ def generate_context(
         "recent_activities": intervals_payload.get("recent_activities"),
         "wellness_debug": intervals_payload.get("wellness_debug"),
         "fit_auto_downloaded": bool(fit_path),
-        "fit_auto_download": intervals_payload.get("fit_download_info"),
+        "fit_auto_download": fit_download_info or intervals_payload.get("fit_download_info"),
         "fit_analysis_source": fit_source,
     }
     output = {
@@ -213,6 +218,31 @@ def generate_context(
         },
     }
     return output
+
+
+def download_fit_on_demand(intervals_payload: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    latest_ride = intervals_payload.get("latest_ride") or {}
+    activity_id = latest_ride.get("id")
+    if not activity_id:
+        return None, {"source": "skipped", "reason": "latest_ride_id_missing"}
+
+    client = IntervalsClient(
+        IntervalsConfig(
+            api_key=secret_or_env("INTERVALS_API_KEY", ""),
+            athlete_id=str(secret_or_env("INTERVALS_ATHLETE_ID", "0")),
+            base_url=secret_or_env("INTERVALS_BASE_URL", "https://intervals.icu"),
+            data_dir="data",
+            download_fit=True,
+            request_timeout_s=int_setting("FIT_REQUEST_TIMEOUT_S", 6),
+            max_fit_attempts=int_setting("FIT_MAX_ATTEMPTS", 24),
+        )
+    )
+    try:
+        detail = client.get_activity_detail(str(activity_id))
+        merged_ride = {**latest_ride, **client._summarize_activity_detail(detail)}
+        return client.download_fit(merged_ride, detail)
+    except Exception as exc:
+        return None, {"source": "error", "error": str(exc)}
 
 
 def analyze_uploaded_fit(builder: FitActivityContextBuilder, uploaded_fit: Any) -> dict[str, Any]:
