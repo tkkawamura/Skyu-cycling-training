@@ -91,10 +91,10 @@ def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
     try:
         payload = intervals_client.collect_dashboard(oldest=oldest, newest=newest)
         source = "intervals"
-    except IntervalsError as exc:
+    except Exception as exc:
         payload = intervals_client.sample_dashboard(oldest=oldest, newest=today)
         source = "sample"
-        warnings.append(str(exc))
+        warnings.append(f"{type(exc).__name__}: {exc}")
     payload = apply_metric_defaults(payload)
     return {
         "payload": payload,
@@ -1222,5 +1222,18 @@ def display(value: Any, suffix: str = "") -> str:
     return f"{value} {suffix}".strip()
 
 
+def run_app() -> None:
+    try:
+        main()
+    except Exception as exc:
+        try:
+            st.set_page_config(page_title="トレーニングコーチJSONジェネレータ", layout="wide")
+        except Exception:
+            pass
+        st.error("アプリ起動時にエラーが発生しました。")
+        st.write({"error_type": type(exc).__name__, "message": str(exc)})
+        st.info("この画面が出ている場合は、表示された error_type と message を共有してください。")
+
+
 if __name__ == "__main__":
-    main()
+    run_app()
