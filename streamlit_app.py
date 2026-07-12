@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import gzip
+import re
 import tempfile
 from html import escape
 from datetime import date, datetime, timedelta, timezone
@@ -34,10 +35,10 @@ def main() -> None:
     render_startup_intervals_snapshot(intervals_snapshot)
     metrics = (intervals_snapshot.get("payload") or {}).get("metrics") or {}
 
-    cp = int(metrics.get("ftp") or int_setting("ATHLETE_CRITICAL_POWER_W", 250))
-    body_mass = float(metrics.get("weight") or float_setting("ATHLETE_BODY_MASS_KG", 63.0))
-    max_hr = int(metrics.get("max_heart_rate") or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
-    w_prime = float(metrics.get("w_prime_capacity") or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
+    cp = int(to_float(metrics.get("ftp")) or int_setting("ATHLETE_CRITICAL_POWER_W", 250))
+    body_mass = float(to_float(metrics.get("weight")) or float_setting("ATHLETE_BODY_MASS_KG", 63.0))
+    max_hr = int(to_float(metrics.get("max_heart_rate")) or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
+    w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
     st.subheader("主観入力")
     rpe_cols = st.columns(2)
@@ -679,10 +680,13 @@ def format_decimal(value: Any, digits: int) -> str | None:
 def to_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
+    if isinstance(value, (dict, list, tuple, set)):
+        return None
     try:
         return float(value)
     except (TypeError, ValueError):
-        return None
+        match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+        return float(match.group(0)) if match else None
 
 
 def to_kmh_value(value: Any) -> float | None:

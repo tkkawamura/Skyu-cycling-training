@@ -4,6 +4,7 @@ import csv
 import gzip
 import io
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -665,10 +666,15 @@ def date_part(value: Any) -> str | None:
 def number(value: Any) -> float | int | None:
     if value in (None, ""):
         return None
+    if isinstance(value, (dict, list, tuple, set)):
+        return None
     try:
         result = float(value)
     except (TypeError, ValueError):
-        return None
+        match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+        if not match:
+            return None
+        result = float(match.group(0))
     if result.is_integer():
         return int(result)
     return round(result, 2)
