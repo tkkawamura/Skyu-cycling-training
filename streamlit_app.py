@@ -791,6 +791,10 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"|最大心拍|{display(metrics.get('max_heart_rate'), 'bpm')}|",
         f"|基準|{display(metrics.get('condition_baseline'))} / {display(metrics.get('condition_baseline_date'))}|",
         "",
+        "## コンディション解釈基準",
+        "- 安静時心拍: 39 bpm前後はシーズンベスト級、40〜43 bpmは良好な状態として扱う。",
+        "- HRV: 45〜60 msを良好なベースラインとして扱う。",
+        "",
         "## 最新ライド",
         "|項目|値|",
         "|---|---:|",
@@ -832,6 +836,11 @@ def build_review_markdown(context: dict[str, Any]) -> str:
     if lap_lines:
         lines.extend(["", "## User Lap"])
         lines.extend(lap_lines)
+
+    pedaling_lines = markdown_pedaling_dynamics(fit_segments)
+    if pedaling_lines:
+        lines.extend(["", "## サイクリングダイナミクス"])
+        lines.extend(pedaling_lines)
 
     comparison = fit_llm.get("interval_lap_comparison") or []
     if comparison:
@@ -965,6 +974,125 @@ def markdown_interval_lap_comparison(comparison: Any) -> list[str]:
             )
         )
     return rows
+
+
+def markdown_pedaling_dynamics(fit_segments: dict[str, Any]) -> list[str]:
+    if not isinstance(fit_segments, dict):
+        return []
+    segments = []
+    for item in (fit_segments.get("auto_interval_segments") or [])[:6]:
+        if isinstance(item, dict):
+            segments.append(item)
+    for item in (fit_segments.get("user_lap_segments") or [])[:4]:
+        if isinstance(item, dict):
+            segments.append(item)
+    rows = [
+        "|ID|平均Power Phase|左右Power Phase|平均Peak PP|左右Peak PP|PCO|左右バランス|Torque Effectiveness|Pedal Smoothness|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for item in segments:
+        dynamics = item.get("pedaling_dynamics") or {}
+        if not isinstance(dynamics, dict) or not has_pedaling_detail(dynamics):
+            continue
+        rows.append(
+            "|{id}|{pp_avg}|{pp_lr}|{peak_avg}|{peak_lr}|{pco}|{balance}|{te}|{ps}|".format(
+                id=display(item.get("segment_id") or item.get("id")),
+                pp_avg=format_phase_average(dynamics.get("power_phase")),
+                pp_lr=format_phase_lr(dynamics.get("power_phase")),
+                peak_avg=format_phase_average(dynamics.get("peak_power_phase")),
+                peak_lr=format_phase_lr(dynamics.get("peak_power_phase")),
+                pco=format_platform_center_offset(dynamics.get("platform_center_offset")),
+                balance=format_left_right_balance(dynamics.get("left_right_balance")),
+                te=format_left_right_percent(dynamics.get("torque_effectiveness")),
+                ps=format_left_right_percent(dynamics.get("pedal_smoothness")),
+            )
+        )
+    return rows if len(rows) > 2 else []
+
+
+def has_pedaling_detail(dynamics: dict[str, Any]) -> bool:
+    text = " ".join(
+        [
+            format_phase_average(dynamics.get("power_phase")),
+            format_phase_lr(dynamics.get("power_phase")),
+            format_phase_average(dynamics.get("peak_power_phase")),
+            format_phase_lr(dynamics.get("peak_power_phase")),
+            format_platform_center_offset(dynamics.get("platform_center_offset")),
+            format_left_right_balance(dynamics.get("left_right_balance")),
+            format_left_right_percent(dynamics.get("torque_effectiveness")),
+            format_left_right_percent(dynamics.get("pedal_smoothness")),
+        ]
+    )
+    return text.replace("-", "").strip() != ""
+
+
+def format_phase_average(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    return format_phase(
+        value.get("average_start_mean_deg"),
+        value.get("average_end_mean_deg"),
+        value.get("average_width_mean_deg"),
+    )
+
+
+def format_phase_lr(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    left = format_phase(value.get("left_start_mean_deg"), value.get("left_end_mean_deg"), value.get("left_width_mean_deg"))
+    right = format_phase(value.get("right_start_mean_deg"), value.get("right_end_mean_deg"), value.get("right_width_mean_deg"))
+    parts = []
+    if left != "-":
+        parts.append(f"L {left}")
+    if right != "-":
+        parts.append(f"R {right}")
+    return " / ".join(parts) if parts else "-"
+
+
+def format_phase(start: Any, end: Any, width: Any) -> str:
+    start_text = format_decimal(start, 0)
+    end_text = format_decimal(end, 0)
+    width_text = format_decimal(width, 0)
+    if not start_text and not end_text and not width_text:
+        return "-"
+    range_text = f"{start_text or '?'}-{end_text or '?'}deg"
+    return f"{range_text} ({width_text}deg)" if width_text else range_text
+
+
+def format_platform_center_offset(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    left = format_decimal(value.get("left_mean_mm"), 1)
+    right = format_decimal(value.get("right_mean_mm"), 1)
+    parts = []
+    if left:
+        parts.append(f"L {left}mm")
+    if right:
+        parts.append(f"R {right}mm")
+    return " / ".join(parts) if parts else "-"
+
+
+def format_left_right_balance(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    left = format_decimal(value.get("mean_left_pct"), 1)
+    if not left:
+        return "-"
+    right_value = 100 - float(left)
+    return f"{left}% / {right_value:.1f}%"
+
+
+def format_left_right_percent(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    left = format_decimal(value.get("left_mean_pct"), 1)
+    right = format_decimal(value.get("right_mean_pct"), 1)
+    parts = []
+    if left:
+        parts.append(f"L {left}%")
+    if right:
+        parts.append(f"R {right}%")
+    return " / ".join(parts) if parts else "-"
 
 
 def markdown_coach_context(coach_context: Any) -> list[str]:
@@ -1158,7 +1286,10 @@ def build_chatgpt_prompt() -> str:
         "RPEとメモは本人の主観情報として扱ってください。\n\n"
         "読み取りルール:\n"
         "- データ内にない事実は推測で補わないでください。\n"
+        "- 安静時心拍は39 bpm前後をシーズンベスト級、40〜43 bpmを良好な状態として解釈してください。\n"
+        "- HRVは45〜60 msを良好なベースラインとして解釈してください。\n"
         "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
+        "- サイクリングダイナミクスは、Power Phase、Peak Power Phase、Platform Center Offset、左右バランス、Torque Effectiveness、Pedal Smoothnessの値がある場合だけ評価してください。\n"
         "- W′は設定最大値、最低W′bal、W′ドロップ、残量を比較し、高強度でどこまで掘れたか、どれだけ余ったかを評価してください。\n"
         "- 利用可能な指標と指標の有無を先に確認し、使える値だけで評価してください。\n"
         "- missing / removed / not_applicable / null / sample_count=0 の指標は使わないでください。\n"

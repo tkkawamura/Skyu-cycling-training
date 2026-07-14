@@ -303,12 +303,13 @@ class FitActivityContextBuilder:
         work_kj = sum(powers) / 1000 if powers else None
         distance = max(distances) - min(distances) if len(distances) >= 2 else None
         torque = estimated_torque(rows)
+        pedaling = pedaling_dynamics(rows, torque)
         hr_mean = mean(hrs) if hrs else None
         return {
             "segment_id": segment_id,
             "segment_source": source,
             "segment_role": role,
-            "has_pedaling_dynamics": torque["sample_count"] > 0,
+            "has_pedaling_dynamics": pedaling["sample_count"] > 0,
             "start_s": rows[0]["elapsed_s"],
             "end_s": rows[-1]["elapsed_s"],
             "duration_s": duration,
@@ -335,7 +336,7 @@ class FitActivityContextBuilder:
                 "mean_speed_kmh": round_or_none(mean(speeds) * 3.6, 1) if speeds else None,
                 "mean_temperature_c": round_or_none(mean(temps), 1) if temps else None,
             },
-            "pedaling_dynamics": empty_pedaling_dynamics(torque),
+            "pedaling_dynamics": pedaling,
             "classification": {
                 "effort_type": effort_type(cp_ratio),
                 "execution_pattern": execution_pattern(duration, cp_ratio),
@@ -626,6 +627,21 @@ def normalize_record(row: dict[str, Any]) -> dict[str, Any]:
         "distance": as_float(row.get("distance")),
         "altitude": as_float(row.get("enhanced_altitude") or row.get("altitude")),
         "temperature": as_float(row.get("temperature")),
+        "left_right_balance_pct": as_float(first_present(row, "left_right_balance", "left_balance", "left_right_balance_left")),
+        "left_platform_center_offset_mm": as_float(first_present(row, "left_platform_center_offset", "left_pco", "left_platform_center_offset_mm")),
+        "right_platform_center_offset_mm": as_float(first_present(row, "right_platform_center_offset", "right_pco", "right_platform_center_offset_mm")),
+        "left_torque_effectiveness_pct": as_float(first_present(row, "left_torque_effectiveness", "left_torque_effectiveness_pct")),
+        "right_torque_effectiveness_pct": as_float(first_present(row, "right_torque_effectiveness", "right_torque_effectiveness_pct")),
+        "left_pedal_smoothness_pct": as_float(first_present(row, "left_pedal_smoothness", "left_pedal_smoothness_pct")),
+        "right_pedal_smoothness_pct": as_float(first_present(row, "right_pedal_smoothness", "right_pedal_smoothness_pct")),
+        "left_power_phase_start_deg": as_float(first_present(row, "left_power_phase_start", "left_power_phase_start_angle", "left_power_phase_start_deg")) or as_float_index(row.get("left_power_phase"), 0),
+        "left_power_phase_end_deg": as_float(first_present(row, "left_power_phase_end", "left_power_phase_end_angle", "left_power_phase_end_deg")) or as_float_index(row.get("left_power_phase"), 1),
+        "right_power_phase_start_deg": as_float(first_present(row, "right_power_phase_start", "right_power_phase_start_angle", "right_power_phase_start_deg")) or as_float_index(row.get("right_power_phase"), 0),
+        "right_power_phase_end_deg": as_float(first_present(row, "right_power_phase_end", "right_power_phase_end_angle", "right_power_phase_end_deg")) or as_float_index(row.get("right_power_phase"), 1),
+        "left_peak_power_phase_start_deg": as_float(first_present(row, "left_peak_power_phase_start", "left_peak_power_phase_start_angle", "left_peak_power_phase_start_deg")) or as_float_index(row.get("left_peak_power_phase"), 0),
+        "left_peak_power_phase_end_deg": as_float(first_present(row, "left_peak_power_phase_end", "left_peak_power_phase_end_angle", "left_peak_power_phase_end_deg")) or as_float_index(row.get("left_peak_power_phase"), 1),
+        "right_peak_power_phase_start_deg": as_float(first_present(row, "right_peak_power_phase_start", "right_peak_power_phase_start_angle", "right_peak_power_phase_start_deg")) or as_float_index(row.get("right_peak_power_phase"), 0),
+        "right_peak_power_phase_end_deg": as_float(first_present(row, "right_peak_power_phase_end", "right_peak_power_phase_end_angle", "right_peak_power_phase_end_deg")) or as_float_index(row.get("right_peak_power_phase"), 1),
     }
 
 
@@ -731,30 +747,93 @@ def estimated_torque(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def empty_pedaling_dynamics(torque: dict[str, Any]) -> dict[str, Any]:
+def pedaling_dynamics(records: list[dict[str, Any]], torque: dict[str, Any]) -> dict[str, Any]:
+    left_balance = values(records, "left_right_balance_pct")
+    left_pco = values(records, "left_platform_center_offset_mm")
+    right_pco = values(records, "right_platform_center_offset_mm")
+    left_te = values(records, "left_torque_effectiveness_pct")
+    right_te = values(records, "right_torque_effectiveness_pct")
+    left_ps = values(records, "left_pedal_smoothness_pct")
+    right_ps = values(records, "right_pedal_smoothness_pct")
+    pp = phase_summary(records, "power_phase")
+    peak_pp = phase_summary(records, "peak_power_phase")
+    sample_count = max(
+        len(left_balance),
+        len(left_pco),
+        len(right_pco),
+        len(left_te),
+        len(right_te),
+        len(left_ps),
+        len(right_ps),
+        pp.get("sample_count", 0),
+        peak_pp.get("sample_count", 0),
+        torque.get("sample_count", 0),
+    )
     return {
-        "left_right_balance": {"mean_left_pct": None, "min_left_pct": None, "max_left_pct": None, "sample_count": 0},
-        "platform_center_offset": {"left_mean_mm": None, "right_mean_mm": None, "left_sample_count": 0, "right_sample_count": 0},
-        "power_phase": {
-            "left_start_mean_deg": None,
-            "left_end_mean_deg": None,
-            "left_width_mean_deg": None,
-            "right_start_mean_deg": None,
-            "right_end_mean_deg": None,
-            "right_width_mean_deg": None,
+        "sample_count": sample_count,
+        "left_right_balance": {
+            "mean_left_pct": round_or_none(mean(left_balance), 1) if left_balance else None,
+            "min_left_pct": round_or_none(min(left_balance), 1) if left_balance else None,
+            "max_left_pct": round_or_none(max(left_balance), 1) if left_balance else None,
+            "sample_count": len(left_balance),
         },
-        "peak_power_phase": {
-            "left_start_mean_deg": None,
-            "left_end_mean_deg": None,
-            "left_width_mean_deg": None,
-            "right_start_mean_deg": None,
-            "right_end_mean_deg": None,
-            "right_width_mean_deg": None,
+        "platform_center_offset": {
+            "left_mean_mm": round_or_none(mean(left_pco), 1) if left_pco else None,
+            "right_mean_mm": round_or_none(mean(right_pco), 1) if right_pco else None,
+            "left_sample_count": len(left_pco),
+            "right_sample_count": len(right_pco),
         },
-        "torque_effectiveness": {"left_mean_pct": None, "right_mean_pct": None, "left_sample_count": 0, "right_sample_count": 0},
-        "pedal_smoothness": {"left_mean_pct": None, "right_mean_pct": None, "left_sample_count": 0, "right_sample_count": 0},
+        "power_phase": pp,
+        "peak_power_phase": peak_pp,
+        "torque_effectiveness": {
+            "left_mean_pct": round_or_none(mean(left_te), 1) if left_te else None,
+            "right_mean_pct": round_or_none(mean(right_te), 1) if right_te else None,
+            "left_sample_count": len(left_te),
+            "right_sample_count": len(right_te),
+        },
+        "pedal_smoothness": {
+            "left_mean_pct": round_or_none(mean(left_ps), 1) if left_ps else None,
+            "right_mean_pct": round_or_none(mean(right_ps), 1) if right_ps else None,
+            "left_sample_count": len(left_ps),
+            "right_sample_count": len(right_ps),
+        },
         "estimated_crank_torque": torque,
     }
+
+
+def phase_summary(records: list[dict[str, Any]], prefix: str) -> dict[str, Any]:
+    left_start = values(records, f"left_{prefix}_start_deg")
+    left_end = values(records, f"left_{prefix}_end_deg")
+    right_start = values(records, f"right_{prefix}_start_deg")
+    right_end = values(records, f"right_{prefix}_end_deg")
+    left_widths = [phase_width(start, end) for start, end in zip(left_start, left_end)]
+    right_widths = [phase_width(start, end) for start, end in zip(right_start, right_end)]
+    left_widths = [value for value in left_widths if value is not None]
+    right_widths = [value for value in right_widths if value is not None]
+    all_starts = left_start + right_start
+    all_ends = left_end + right_end
+    all_widths = left_widths + right_widths
+    return {
+        "average_start_mean_deg": round_or_none(mean(all_starts), 1) if all_starts else None,
+        "average_end_mean_deg": round_or_none(mean(all_ends), 1) if all_ends else None,
+        "average_width_mean_deg": round_or_none(mean(all_widths), 1) if all_widths else None,
+        "left_start_mean_deg": round_or_none(mean(left_start), 1) if left_start else None,
+        "left_end_mean_deg": round_or_none(mean(left_end), 1) if left_end else None,
+        "left_width_mean_deg": round_or_none(mean(left_widths), 1) if left_widths else None,
+        "right_start_mean_deg": round_or_none(mean(right_start), 1) if right_start else None,
+        "right_end_mean_deg": round_or_none(mean(right_end), 1) if right_end else None,
+        "right_width_mean_deg": round_or_none(mean(right_widths), 1) if right_widths else None,
+        "sample_count": max(len(left_start), len(left_end), len(right_start), len(right_end)),
+    }
+
+
+def phase_width(start: float | None, end: float | None) -> float | None:
+    if start is None or end is None:
+        return None
+    width = end - start
+    if width < 0:
+        width += 360
+    return width
 
 
 def segment_metric_presence(powers, hrs, cadences, speeds, distance, torque_count, role) -> dict[str, Any]:
@@ -892,6 +971,21 @@ def as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def as_float_index(value: Any, index: int) -> float | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    if index >= len(value):
+        return None
+    return as_float(value[index])
+
+
+def first_present(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in data and data[key] not in (None, ""):
+            return data[key]
+    return None
 
 
 def round_or_none(value: Any, digits: int) -> Any:
