@@ -10,6 +10,16 @@ from typing import Any
 from fitparse import FitFile
 
 
+CYCLING_DYNAMICS_FIELD_GROUPS = {
+    "power_phase": ("power_phase",),
+    "peak_power_phase": ("peak_power_phase", "power_phase_peak"),
+    "platform_center_offset": ("platform_center_offset", "pco"),
+    "left_right_balance": ("left_right_balance", "left_balance", "right_balance", "power_balance"),
+    "torque_effectiveness": ("torque_effectiveness",),
+    "pedal_smoothness": ("pedal_smoothness",),
+}
+
+
 @dataclass
 class AthleteInputs:
     critical_power_w: float | None = None
@@ -23,10 +33,11 @@ class FitActivityContextBuilder:
         self.athlete = athlete
 
     def build(self, fit_path: str | Path) -> dict[str, Any]:
-        records, laps = self._read_fit(fit_path)
+        records, laps, field_inventory = self._read_fit(fit_path)
         if not records:
             raise ValueError("No record messages found in FIT file.")
 
+        cycling_dynamics_inventory = cycling_dynamics_field_inventory(field_inventory)
         summary = self._summary(records)
         load = self._load(records, summary)
         auto_segments = self._auto_segments(records, load)
@@ -84,6 +95,7 @@ class FitActivityContextBuilder:
                     "auto_intervals_with_pedaling_dynamics": sum(1 for seg in auto_segments if seg["has_pedaling_dynamics"]),
                     "user_laps_with_pedaling_dynamics": sum(1 for seg in user_laps if seg["has_pedaling_dynamics"]),
                 },
+                "cycling_dynamics_inventory": cycling_dynamics_inventory,
             },
         }
 
@@ -125,6 +137,7 @@ class FitActivityContextBuilder:
                 "summary": summary,
                 "load": load,
                 "data_quality": self._data_quality(records),
+                "fit_field_inventory": cycling_dynamics_inventory,
             },
             "physiology": self._physiology(records, w_prime_series),
             "signals": {
@@ -162,16 +175,18 @@ class FitActivityContextBuilder:
             },
         }
 
-    def _read_fit(self, fit_path: str | Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _read_fit(self, fit_path: str | Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[str]]]:
         fit = FitFile(str(fit_path))
         records = []
         laps = []
+        field_inventory: dict[str, set[str]] = {"record": set(), "lap": set()}
         first_ts = None
 
         for message in fit.get_messages():
             if message.name not in {"record", "lap"}:
                 continue
             row = {field.name: field.value for field in message}
+            field_inventory[message.name].update(row.keys())
             if message.name == "record":
                 ts = row.get("timestamp")
                 if ts and first_ts is None:
@@ -180,7 +195,7 @@ class FitActivityContextBuilder:
                 records.append(normalize_record(row))
             elif message.name == "lap":
                 laps.append(normalize_lap(row, first_ts))
-        return records, laps
+        return records, laps, {name: sorted(fields) for name, fields in field_inventory.items()}
 
     def _summary(self, records: list[dict[str, Any]]) -> dict[str, Any]:
         powers = values(records, "power")
@@ -341,7 +356,7 @@ class FitActivityContextBuilder:
                 "effort_type": effort_type(cp_ratio),
                 "execution_pattern": execution_pattern(duration, cp_ratio),
             },
-            "metric_presence": segment_metric_presence(powers, hrs, cadences, speeds, distance, torque["sample_count"], role),
+            "metric_presence": segment_metric_presence(powers, hrs, cadences, speeds, distance, pedaling["cycling_dynamics_sample_count"], role),
         }
 
     def _interval_lap_comparison(self, intervals: list[dict[str, Any]], laps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -627,21 +642,45 @@ def normalize_record(row: dict[str, Any]) -> dict[str, Any]:
         "distance": as_float(row.get("distance")),
         "altitude": as_float(row.get("enhanced_altitude") or row.get("altitude")),
         "temperature": as_float(row.get("temperature")),
-        "left_right_balance_pct": as_float(first_present(row, "left_right_balance", "left_balance", "left_right_balance_left")),
-        "left_platform_center_offset_mm": as_float(first_present(row, "left_platform_center_offset", "left_pco", "left_platform_center_offset_mm")),
-        "right_platform_center_offset_mm": as_float(first_present(row, "right_platform_center_offset", "right_pco", "right_platform_center_offset_mm")),
-        "left_torque_effectiveness_pct": as_float(first_present(row, "left_torque_effectiveness", "left_torque_effectiveness_pct")),
-        "right_torque_effectiveness_pct": as_float(first_present(row, "right_torque_effectiveness", "right_torque_effectiveness_pct")),
-        "left_pedal_smoothness_pct": as_float(first_present(row, "left_pedal_smoothness", "left_pedal_smoothness_pct")),
-        "right_pedal_smoothness_pct": as_float(first_present(row, "right_pedal_smoothness", "right_pedal_smoothness_pct")),
+        "left_right_balance_pct": as_float(first_present(row, "left_right_balance", "left_balance", "left_power_balance", "power_balance", "left_right_balance_left")),
+        "left_platform_center_offset_mm": as_float(first_present(row, "left_platform_center_offset", "left_pco", "left_platform_center_offset_mm", "left_platform_center_offset_value")),
+        "right_platform_center_offset_mm": as_float(first_present(row, "right_platform_center_offset", "right_pco", "right_platform_center_offset_mm", "right_platform_center_offset_value")),
+        "left_torque_effectiveness_pct": as_float(first_present(row, "left_torque_effectiveness", "left_torque_effectiveness_pct", "left_torque_effectiveness_percent")),
+        "right_torque_effectiveness_pct": as_float(first_present(row, "right_torque_effectiveness", "right_torque_effectiveness_pct", "right_torque_effectiveness_percent")),
+        "left_pedal_smoothness_pct": as_float(first_present(row, "left_pedal_smoothness", "left_pedal_smoothness_pct", "left_pedal_smoothness_percent", "pedal_smoothness")),
+        "right_pedal_smoothness_pct": as_float(first_present(row, "right_pedal_smoothness", "right_pedal_smoothness_pct", "right_pedal_smoothness_percent", "pedal_smoothness")),
         "left_power_phase_start_deg": as_float(first_present(row, "left_power_phase_start", "left_power_phase_start_angle", "left_power_phase_start_deg")) or as_float_index(row.get("left_power_phase"), 0),
         "left_power_phase_end_deg": as_float(first_present(row, "left_power_phase_end", "left_power_phase_end_angle", "left_power_phase_end_deg")) or as_float_index(row.get("left_power_phase"), 1),
         "right_power_phase_start_deg": as_float(first_present(row, "right_power_phase_start", "right_power_phase_start_angle", "right_power_phase_start_deg")) or as_float_index(row.get("right_power_phase"), 0),
         "right_power_phase_end_deg": as_float(first_present(row, "right_power_phase_end", "right_power_phase_end_angle", "right_power_phase_end_deg")) or as_float_index(row.get("right_power_phase"), 1),
-        "left_peak_power_phase_start_deg": as_float(first_present(row, "left_peak_power_phase_start", "left_peak_power_phase_start_angle", "left_peak_power_phase_start_deg")) or as_float_index(row.get("left_peak_power_phase"), 0),
-        "left_peak_power_phase_end_deg": as_float(first_present(row, "left_peak_power_phase_end", "left_peak_power_phase_end_angle", "left_peak_power_phase_end_deg")) or as_float_index(row.get("left_peak_power_phase"), 1),
-        "right_peak_power_phase_start_deg": as_float(first_present(row, "right_peak_power_phase_start", "right_peak_power_phase_start_angle", "right_peak_power_phase_start_deg")) or as_float_index(row.get("right_peak_power_phase"), 0),
-        "right_peak_power_phase_end_deg": as_float(first_present(row, "right_peak_power_phase_end", "right_peak_power_phase_end_angle", "right_peak_power_phase_end_deg")) or as_float_index(row.get("right_peak_power_phase"), 1),
+        "left_peak_power_phase_start_deg": as_float(first_present(row, "left_peak_power_phase_start", "left_peak_power_phase_start_angle", "left_peak_power_phase_start_deg", "left_power_phase_peak_start", "left_power_phase_peak_start_angle")) or as_float_index(first_present(row, "left_peak_power_phase", "left_power_phase_peak"), 0),
+        "left_peak_power_phase_end_deg": as_float(first_present(row, "left_peak_power_phase_end", "left_peak_power_phase_end_angle", "left_peak_power_phase_end_deg", "left_power_phase_peak_end", "left_power_phase_peak_end_angle")) or as_float_index(first_present(row, "left_peak_power_phase", "left_power_phase_peak"), 1),
+        "right_peak_power_phase_start_deg": as_float(first_present(row, "right_peak_power_phase_start", "right_peak_power_phase_start_angle", "right_peak_power_phase_start_deg", "right_power_phase_peak_start", "right_power_phase_peak_start_angle")) or as_float_index(first_present(row, "right_peak_power_phase", "right_power_phase_peak"), 0),
+        "right_peak_power_phase_end_deg": as_float(first_present(row, "right_peak_power_phase_end", "right_peak_power_phase_end_angle", "right_peak_power_phase_end_deg", "right_power_phase_peak_end", "right_power_phase_peak_end_angle")) or as_float_index(first_present(row, "right_peak_power_phase", "right_power_phase_peak"), 1),
+    }
+
+
+def cycling_dynamics_field_inventory(field_inventory: dict[str, list[str]]) -> dict[str, Any]:
+    record_fields = field_inventory.get("record") or []
+    lap_fields = field_inventory.get("lap") or []
+    matched_record_fields = sorted(
+        field
+        for field in record_fields
+        if any(alias in field.lower() for aliases in CYCLING_DYNAMICS_FIELD_GROUPS.values() for alias in aliases)
+    )
+    groups = {}
+    for group, aliases in CYCLING_DYNAMICS_FIELD_GROUPS.items():
+        matched = sorted(field for field in record_fields if any(alias in field.lower() for alias in aliases))
+        groups[group] = {
+            "status": "available" if matched else "missing",
+            "record_fields": matched,
+        }
+    return {
+        "record_field_count": len(record_fields),
+        "lap_field_count": len(lap_fields),
+        "matched_record_fields": matched_record_fields,
+        "groups": groups,
+        "note": "missing means the FIT file did not expose that field name to fitparse; Intervals-generated FIT files may omit Garmin cycling dynamics.",
     }
 
 
@@ -757,7 +796,7 @@ def pedaling_dynamics(records: list[dict[str, Any]], torque: dict[str, Any]) -> 
     right_ps = values(records, "right_pedal_smoothness_pct")
     pp = phase_summary(records, "power_phase")
     peak_pp = phase_summary(records, "peak_power_phase")
-    sample_count = max(
+    cycling_dynamics_sample_count = max(
         len(left_balance),
         len(left_pco),
         len(right_pco),
@@ -767,10 +806,15 @@ def pedaling_dynamics(records: list[dict[str, Any]], torque: dict[str, Any]) -> 
         len(right_ps),
         pp.get("sample_count", 0),
         peak_pp.get("sample_count", 0),
+    )
+    sample_count = max(
+        cycling_dynamics_sample_count,
         torque.get("sample_count", 0),
     )
     return {
         "sample_count": sample_count,
+        "cycling_dynamics_sample_count": cycling_dynamics_sample_count,
+        "has_cycling_dynamics": cycling_dynamics_sample_count > 0,
         "left_right_balance": {
             "mean_left_pct": round_or_none(mean(left_balance), 1) if left_balance else None,
             "min_left_pct": round_or_none(min(left_balance), 1) if left_balance else None,

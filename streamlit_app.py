@@ -285,6 +285,7 @@ def build_compact_fit_context(fit_context: dict[str, Any] | None) -> dict[str, A
                 "summary": None,
                 "load": None,
                 "data_quality": None,
+                "fit_field_inventory": None,
             },
         ),
         "physiology": pick_nested(
@@ -842,6 +843,11 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         lines.extend(["", "## サイクリングダイナミクス"])
         lines.extend(pedaling_lines)
 
+    cycling_dynamics_diagnostics = markdown_cycling_dynamics_diagnostics(fit)
+    if cycling_dynamics_diagnostics:
+        lines.extend(["", "## サイクリングダイナミクス診断"])
+        lines.extend(cycling_dynamics_diagnostics)
+
     comparison = fit_llm.get("interval_lap_comparison") or []
     if comparison:
         lines.extend(["", "## 区間とLapの対応"])
@@ -1008,6 +1014,36 @@ def markdown_pedaling_dynamics(fit_segments: dict[str, Any]) -> list[str]:
             )
         )
     return rows if len(rows) > 2 else []
+
+
+def markdown_cycling_dynamics_diagnostics(fit: dict[str, Any] | None) -> list[str]:
+    if not isinstance(fit, dict):
+        return []
+    inventory = ((fit.get("activity") or {}).get("fit_field_inventory") or {})
+    groups = inventory.get("groups") or {}
+    if not isinstance(groups, dict):
+        return []
+    labels = {
+        "power_phase": "Power Phase",
+        "peak_power_phase": "Peak Power Phase",
+        "platform_center_offset": "Platform Center Offset",
+        "left_right_balance": "左右パワーバランス",
+        "torque_effectiveness": "Torque Effectiveness",
+        "pedal_smoothness": "Pedal Smoothness",
+    }
+    rows = ["|項目|FIT内の状態|検出したrecordフィールド|", "|---|---|---|"]
+    for key, label in labels.items():
+        item = groups.get(key) or {}
+        fields = item.get("record_fields") or []
+        rows.append(f"|{label}|{display(item.get('status'))}|{', '.join(fields[:8]) if fields else '-'}|")
+    matched = inventory.get("matched_record_fields") or []
+    if matched:
+        rows.extend(["", f"- 検出したサイクリングダイナミクス系フィールド: {', '.join(matched[:20])}"])
+    else:
+        rows.extend(["", "- サイクリングダイナミクス系フィールドはFIT record内で検出できませんでした。"])
+    rows.append("- missing の項目は、このFITに未収録、またはIntervals.icu生成FITで削られている可能性があります。")
+    rows.append("- 推定クランクトルクはPower/Cadenceから計算した参考値で、Garmin Cycling Dynamicsそのものではありません。")
+    return rows
 
 
 def has_pedaling_detail(dynamics: dict[str, Any]) -> bool:
@@ -1290,6 +1326,8 @@ def build_chatgpt_prompt() -> str:
         "- HRVは45〜60 msを良好なベースラインとして解釈してください。\n"
         "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
         "- サイクリングダイナミクスは、Power Phase、Peak Power Phase、Platform Center Offset、左右バランス、Torque Effectiveness、Pedal Smoothnessの値がある場合だけ評価してください。\n"
+        "- サイクリングダイナミクス診断でmissingの項目は、推測せず「FITに未収録または未検出」と扱ってください。\n"
+        "- W′bal時系列グラフは含めていないため、CP / W′セクションの最低W′bal、終了W′bal、W′消費、20%以下時間を使って評価してください。\n"
         "- W′は設定最大値、最低W′bal、W′ドロップ、残量を比較し、高強度でどこまで掘れたか、どれだけ余ったかを評価してください。\n"
         "- 利用可能な指標と指標の有無を先に確認し、使える値だけで評価してください。\n"
         "- missing / removed / not_applicable / null / sample_count=0 の指標は使わないでください。\n"
