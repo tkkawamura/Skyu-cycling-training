@@ -21,7 +21,9 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-07-10-markdown-full-coach-context-v1"
+APP_VERSION = "2026-07-28-14d-detail-42d-summary-v1"
+DETAILED_HISTORY_DAYS = 14
+LONG_HISTORY_DAYS = 42
 
 
 def main() -> None:
@@ -30,7 +32,7 @@ def main() -> None:
     st.markdown('<h1 class="app-title">トレーニングコーチJSONジェネレータ</h1>', unsafe_allow_html=True)
     st.caption(f"アプリ版: {APP_VERSION}")
 
-    lookback_days = int_setting("LOOKBACK_DAYS", 21)
+    lookback_days = max(LONG_HISTORY_DAYS, int_setting("LOOKBACK_DAYS", LONG_HISTORY_DAYS))
     intervals_snapshot = load_intervals_snapshot(lookback_days)
     render_startup_intervals_snapshot(intervals_snapshot)
     metrics = (intervals_snapshot.get("payload") or {}).get("metrics") or {}
@@ -171,6 +173,7 @@ def generate_context(
         metrics["ftp"] = athlete.critical_power_w
     if athlete.w_prime_kj:
         metrics["w_prime_capacity"] = athlete.w_prime_kj
+    history_context = build_history_context(intervals_payload, metrics)
 
     intervals_context = {
         "source": intervals_source,
@@ -180,7 +183,10 @@ def generate_context(
         "condition_metrics_purpose": "These Intervals.icu values are fetched automatically at app load/rerun and should be used as the condition baseline for the ride review.",
         "metrics": metrics,
         "latest_ride": sanitize_latest_ride(intervals_payload.get("latest_ride")),
-        "recent_activities": [sanitize_latest_ride(item) for item in (intervals_payload.get("recent_activities") or [])[:5]],
+        "recent_activities": [sanitize_latest_ride(item) for item in (intervals_payload.get("recent_activities") or [])[:14]],
+        "history": history_context,
+        "ride_history_14d": history_context.get("ride_history_14d"),
+        "weekly_summary_42d": history_context.get("weekly_summary_42d"),
         "fit_auto_downloaded": bool(fit_path),
         "fit_auto_download": compact_download_info(fit_download_info or intervals_payload.get("fit_download_info")),
         "fit_analysis_source": fit_source,
@@ -201,7 +207,7 @@ def generate_context(
             "openai_api_called": False,
             "warnings": warnings,
         },
-        "review_prompt": build_chatgpt_prompt(),
+        "review_prompt": f"{build_chatgpt_prompt()}\n\n{build_history_prompt_addendum()}",
         "athlete_inputs": {
             "critical_power_w": athlete.critical_power_w,
             "body_mass_kg": athlete.body_mass_kg,
@@ -374,6 +380,181 @@ def limit_list(value: Any, limit: int) -> list[Any]:
     return value[:limit]
 
 
+def build_history_context(intervals_payload: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    activities = [
+        sanitize_latest_ride(item)
+        for item in (intervals_payload.get("recent_activities") or [])
+        if isinstance(item, dict)
+    ]
+    activities = [item for item in activities if item]
+    trend = [item for item in (intervals_payload.get("trend") or []) if isinstance(item, dict)]
+    latest_ride = intervals_payload.get("latest_ride") or {}
+    anchor = (
+        parse_app_date(latest_ride.get("date"))
+        or parse_app_date(metrics.get("date"))
+        or datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    )
+    ftp = to_float(metrics.get("ftp"))
+    detailed_start = anchor - timedelta(days=DETAILED_HISTORY_DAYS - 1)
+    long_start = anchor - timedelta(days=LONG_HISTORY_DAYS - 1)
+
+    dated_activities = []
+    for activity in activities:
+        activity_date = parse_app_date(activity.get("date") or activity.get("start_time"))
+        if activity_date and long_start <= activity_date <= anchor:
+            dated_activities.append((activity_date, activity))
+    dated_activities.sort(key=lambda item: (item[0], str(item[1].get("start_time") or "")))
+
+    ride_history_14d = [
+        compact_history_ride(activity, activity_date, ftp)
+        for activity_date, activity in dated_activities
+        if detailed_start <= activity_date <= anchor
+    ]
+    weekly_summary_42d = build_weekly_summary(dated_activities, trend, anchor, ftp)
+    summary = summarize_training_history(ride_history_14d, weekly_summary_42d, anchor)
+    return {
+        "anchor_date": anchor.isoformat(),
+        "detailed_days": DETAILED_HISTORY_DAYS,
+        "summary_days": LONG_HISTORY_DAYS,
+        "ride_history_14d": ride_history_14d,
+        "weekly_summary_42d": weekly_summary_42d,
+        "summary": summary,
+        "source_note": "Latest ride uses detailed FIT when available. History uses Intervals.icu activity summaries and wellness trend values.",
+    }
+
+
+def compact_history_ride(activity: dict[str, Any], activity_date: date, ftp: float | None) -> dict[str, Any]:
+    weighted_power = first_existing(activity, "weighted_average_watts", "weighted_power", "icu_weighted_avg_watts")
+    intensity_ratio = None
+    weighted_value = to_float(weighted_power)
+    if weighted_value is not None and ftp:
+        intensity_ratio = round(weighted_value / ftp, 2)
+    return {
+        "date": activity_date.isoformat(),
+        "name": activity.get("name"),
+        "moving_time_s": to_float(first_existing(activity, "moving_time", "elapsed_time")),
+        "distance_m": to_float(activity.get("distance")),
+        "training_load": to_float(activity.get("training_load")),
+        "average_watts": to_float(activity.get("average_watts")),
+        "weighted_average_watts": weighted_value,
+        "intensity_ratio": intensity_ratio,
+        "average_heartrate": to_float(activity.get("average_heartrate")),
+        "max_heartrate": to_float(activity.get("max_heartrate")),
+        "fitness": to_float(activity.get("fitness")),
+        "fatigue": to_float(activity.get("fatigue")),
+        "form": to_float(activity.get("form")),
+    }
+
+
+def build_weekly_summary(
+    dated_activities: list[tuple[date, dict[str, Any]]],
+    trend: list[dict[str, Any]],
+    anchor: date,
+    ftp: float | None,
+) -> list[dict[str, Any]]:
+    long_start = anchor - timedelta(days=LONG_HISTORY_DAYS - 1)
+    rows = []
+    for index in range((LONG_HISTORY_DAYS + 6) // 7):
+        start = long_start + timedelta(days=index * 7)
+        end = min(start + timedelta(days=6), anchor)
+        activities = [
+            compact_history_ride(activity, activity_date, ftp)
+            for activity_date, activity in dated_activities
+            if start <= activity_date <= end
+        ]
+        trend_items = [
+            item
+            for item in trend
+            if (trend_date := parse_app_date(item.get("date"))) is not None and start <= trend_date <= end
+        ]
+        total_time_s = sum(value for row in activities if (value := to_float(row.get("moving_time_s"))) is not None)
+        total_distance_m = sum(value for row in activities if (value := to_float(row.get("distance_m"))) is not None)
+        total_tss = sum(value for row in activities if (value := to_float(row.get("training_load"))) is not None)
+        hard_count = sum(
+            1
+            for row in activities
+            if (to_float(row.get("training_load")) or 0) >= 80
+            or (to_float(row.get("intensity_ratio")) or 0) >= 0.85
+        )
+        rows.append(
+            {
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "ride_count": len(activities),
+                "total_time_s": round(total_time_s),
+                "total_distance_m": round(total_distance_m, 1),
+                "total_training_load": round(total_tss, 1),
+                "avg_training_load": round(total_tss / len(activities), 1) if activities else None,
+                "hard_ride_count": hard_count,
+                "rest_days": max(0, (end - start).days + 1 - len({row.get("date") for row in activities})),
+                "fitness_start": first_trend_value(trend_items, "fitness"),
+                "fitness_end": last_trend_value(trend_items, "fitness"),
+                "fatigue_start": first_trend_value(trend_items, "fatigue"),
+                "fatigue_end": last_trend_value(trend_items, "fatigue"),
+                "form_start": first_trend_value(trend_items, "form"),
+                "form_end": last_trend_value(trend_items, "form"),
+            }
+        )
+    return rows
+
+
+def summarize_training_history(
+    ride_history_14d: list[dict[str, Any]],
+    weekly_summary_42d: list[dict[str, Any]],
+    anchor: date,
+) -> dict[str, Any]:
+    last_7_start = anchor - timedelta(days=6)
+    previous_7_start = anchor - timedelta(days=13)
+    previous_7_end = last_7_start - timedelta(days=1)
+    last_7 = [row for row in ride_history_14d if (row_date := parse_app_date(row.get("date"))) and last_7_start <= row_date <= anchor]
+    previous_7 = [
+        row
+        for row in ride_history_14d
+        if (row_date := parse_app_date(row.get("date"))) and previous_7_start <= row_date <= previous_7_end
+    ]
+    last_14_tss = sum(value for row in ride_history_14d if (value := to_float(row.get("training_load"))) is not None)
+    last_7_tss = sum(value for row in last_7 if (value := to_float(row.get("training_load"))) is not None)
+    previous_7_tss = sum(value for row in previous_7 if (value := to_float(row.get("training_load"))) is not None)
+    last_14_time_s = sum(value for row in ride_history_14d if (value := to_float(row.get("moving_time_s"))) is not None)
+    return {
+        "anchor_date": anchor.isoformat(),
+        "last_14d_ride_count": len(ride_history_14d),
+        "last_14d_total_time_s": round(last_14_time_s),
+        "last_14d_total_training_load": round(last_14_tss, 1),
+        "last_14d_high_load_ride_count": sum(1 for row in ride_history_14d if (to_float(row.get("training_load")) or 0) >= 80),
+        "last_7d_training_load": round(last_7_tss, 1),
+        "previous_7d_training_load": round(previous_7_tss, 1),
+        "last_7d_vs_previous_7d_training_load_delta": round(last_7_tss - previous_7_tss, 1),
+        "weekly_blocks": len(weekly_summary_42d),
+    }
+
+
+def first_trend_value(items: list[dict[str, Any]], key: str) -> float | None:
+    for item in items:
+        value = to_float(item.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def last_trend_value(items: list[dict[str, Any]], key: str) -> float | None:
+    for item in reversed(items):
+        value = to_float(item.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def parse_app_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+    text = str(value).replace("/", "-").replace("T", " ").split(" ")[0]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 def build_review_summary(
     intervals_context: dict[str, Any],
     fit_context: dict[str, Any] | None,
@@ -403,6 +584,7 @@ def build_review_summary(
             "w_prime_balance_drop": metrics.get("w_prime_balance_drop"),
             "training_load": metrics.get("training_load"),
         },
+        "training_history": intervals_context.get("history"),
         "latest_ride": latest_ride,
         "fit_session_summary": fit_llm.get("session_summary"),
         "fit_key_intervals": fit_llm.get("key_intervals"),
@@ -421,6 +603,7 @@ def render_context(context: dict[str, Any]) -> None:
 
     st.subheader("最新ライド")
     st.dataframe(compact_latest_ride(latest), hide_index=True, use_container_width=True)
+    render_history_preview(context["intervals_icu"])
     render_fetch_diagnostics(context["intervals_icu"])
 
     fit_context = context.get("fit_activity_context")
@@ -474,6 +657,24 @@ def render_metrics(metrics: dict[str, Any]) -> None:
     st.markdown("".join(html), unsafe_allow_html=True)
     if metrics.get("condition_baseline_date"):
         st.caption(f"コンディション基準日: {metrics.get('condition_baseline_date')} / {metrics.get('condition_baseline')}")
+
+
+def render_history_preview(intervals_context: dict[str, Any]) -> None:
+    history = intervals_context.get("history") or {}
+    rides = history.get("ride_history_14d") or []
+    weekly = history.get("weekly_summary_42d") or []
+    if not rides and not weekly:
+        return
+    with st.expander("過去トレーニング履歴"):
+        summary = history.get("summary") or {}
+        if summary:
+            st.write(summary)
+        if rides:
+            st.caption("過去14日ライド")
+            st.dataframe(history_ride_rows_for_ui(rides), hide_index=True, use_container_width=True)
+        if weekly:
+            st.caption("過去42日週次サマリー")
+            st.dataframe(history_weekly_rows_for_ui(weekly), hide_index=True, use_container_width=True)
 
 
 def render_fetch_diagnostics(intervals_context: dict[str, Any]) -> None:
@@ -608,6 +809,120 @@ def compact_fit_summary(fit_context: dict[str, Any]) -> list[dict[str, Any]]:
         ("平均ケイデンス", format_int_unit(summary.get("mean_cadence_rpm"), "rpm")),
     ]
     return [{"項目": label, "値": value} for label, value in rows if value not in (None, "")]
+
+
+def history_ride_rows_for_ui(rides: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for ride in rides:
+        rows.append(
+            {
+                "date": format_date(ride.get("date")),
+                "name": display(ride.get("name")),
+                "time": format_minutes(ride.get("moving_time_s")) or "-",
+                "distance": format_km(ride.get("distance_m")) or "-",
+                "TSS": format_int(ride.get("training_load")) or "-",
+                "IF": format_decimal(ride.get("intensity_ratio"), 2) or "-",
+                "avg_power": format_int_unit(ride.get("average_watts"), "W") or "-",
+                "weighted_power": format_int_unit(ride.get("weighted_average_watts"), "W") or "-",
+                "avg_hr": format_int_unit(ride.get("average_heartrate"), "bpm") or "-",
+            }
+        )
+    return rows
+
+
+def history_weekly_rows_for_ui(weekly: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for item in weekly:
+        rows.append(
+            {
+                "period": f"{format_date(item.get('start_date'))}-{format_date(item.get('end_date'))}",
+                "rides": display(item.get("ride_count")),
+                "time": format_minutes(item.get("total_time_s")) or "-",
+                "distance": format_km(item.get("total_distance_m")) or "-",
+                "TSS": format_int(item.get("total_training_load")) or "-",
+                "hard_rides": display(item.get("hard_ride_count")),
+                "rest_days": display(item.get("rest_days")),
+                "Fitness": format_trend_pair(item.get("fitness_start"), item.get("fitness_end")),
+                "Fatigue": format_trend_pair(item.get("fatigue_start"), item.get("fatigue_end")),
+                "Form": format_trend_pair(item.get("form_start"), item.get("form_end")),
+            }
+        )
+    return rows
+
+
+def markdown_history_summary(history: dict[str, Any]) -> list[str]:
+    summary = history.get("summary") or {}
+    if not summary:
+        return []
+    return [
+        "|項目|値|",
+        "|---|---:|",
+        f"|基準日|{display(summary.get('anchor_date'))}|",
+        f"|14日ライド数|{display(summary.get('last_14d_ride_count'))}|",
+        f"|14日合計時間|{format_minutes(summary.get('last_14d_total_time_s')) or '-'}|",
+        f"|14日合計TSS|{format_int(summary.get('last_14d_total_training_load')) or '-'}|",
+        f"|14日高負荷ライド数|{display(summary.get('last_14d_high_load_ride_count'))}|",
+        f"|直近7日TSS|{format_int(summary.get('last_7d_training_load')) or '-'}|",
+        f"|前7日TSS|{format_int(summary.get('previous_7d_training_load')) or '-'}|",
+        f"|直近7日TSS差分|{format_int(summary.get('last_7d_vs_previous_7d_training_load_delta')) or '-'}|",
+    ]
+
+
+def markdown_history_ride_table(rides: list[dict[str, Any]]) -> list[str]:
+    rows = ["|日付|名前|時間|距離|TSS|IF|平均P|加重P|平均HR|Fitness|Fatigue|Form|", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    if not rides:
+        rows.append("|-|-|-|-|-|-|-|-|-|-|-|-|")
+        return rows
+    for ride in rides:
+        rows.append(
+            "|{date}|{name}|{time}|{distance}|{tss}|{ir}|{avgp}|{wp}|{hr}|{fitness}|{fatigue}|{form}|".format(
+                date=format_date(ride.get("date")) or "-",
+                name=display(ride.get("name")),
+                time=format_minutes(ride.get("moving_time_s")) or "-",
+                distance=format_km(ride.get("distance_m")) or "-",
+                tss=format_int(ride.get("training_load")) or "-",
+                ir=format_decimal(ride.get("intensity_ratio"), 2) or "-",
+                avgp=format_int_unit(ride.get("average_watts"), "W") or "-",
+                wp=format_int_unit(ride.get("weighted_average_watts"), "W") or "-",
+                hr=format_int_unit(ride.get("average_heartrate"), "bpm") or "-",
+                fitness=format_decimal(ride.get("fitness"), 1) or "-",
+                fatigue=format_decimal(ride.get("fatigue"), 1) or "-",
+                form=format_decimal(ride.get("form"), 1) or "-",
+            )
+        )
+    return rows
+
+
+def markdown_weekly_history_table(weekly: list[dict[str, Any]]) -> list[str]:
+    rows = ["|期間|ライド|時間|距離|TSS|平均TSS|高負荷|休養日|Fitness|Fatigue|Form|", "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    if not weekly:
+        rows.append("|-|-|-|-|-|-|-|-|-|-|-|")
+        return rows
+    for item in weekly:
+        rows.append(
+            "|{period}|{rides}|{time}|{distance}|{tss}|{avg_tss}|{hard}|{rest}|{fitness}|{fatigue}|{form}|".format(
+                period=f"{format_date(item.get('start_date'))}-{format_date(item.get('end_date'))}",
+                rides=display(item.get("ride_count")),
+                time=format_minutes(item.get("total_time_s")) or "-",
+                distance=format_km(item.get("total_distance_m")) or "-",
+                tss=format_int(item.get("total_training_load")) or "-",
+                avg_tss=format_int(item.get("avg_training_load")) or "-",
+                hard=display(item.get("hard_ride_count")),
+                rest=display(item.get("rest_days")),
+                fitness=format_trend_pair(item.get("fitness_start"), item.get("fitness_end")),
+                fatigue=format_trend_pair(item.get("fatigue_start"), item.get("fatigue_end")),
+                form=format_trend_pair(item.get("form_start"), item.get("form_end")),
+            )
+        )
+    return rows
+
+
+def format_trend_pair(start: Any, end: Any) -> str:
+    start_text = format_decimal(start, 1)
+    end_text = format_decimal(end, 1)
+    if start_text and end_text:
+        return f"{start_text}->{end_text}"
+    return start_text or end_text or "-"
 
 
 def format_date(value: Any) -> str | None:
@@ -755,7 +1070,16 @@ def render_copy_box(text: str) -> None:
 
 def build_paste_text(context: dict[str, Any]) -> str:
     prompt = context.get("chatgpt_usage", {}).get("recommended_prompt") or build_chatgpt_prompt()
-    return f"{prompt}\n\n{build_review_markdown(context)}"
+    return f"{prompt}\n\n{build_history_prompt_addendum()}\n\n{build_review_markdown(context)}"
+
+
+def build_history_prompt_addendum() -> str:
+    return (
+        "追加の読み取りルール:\n"
+        "- 直近ライドは単体ではなく、過去14日ライド履歴と過去42日週次サマリーを前提に、直近負荷・回復・Fitness/Fatigue/Form推移を踏まえて評価してください。\n"
+        "- 過去14日はライド別の実績、過去42日は週次の負荷推移として扱ってください。\n"
+        "- 今日の詳細評価では、最新ライドのFIT解析を最優先し、履歴情報はコンディションと文脈の補助として使ってください。"
+    )
 
 
 def build_review_markdown(context: dict[str, Any]) -> str:
@@ -868,6 +1192,22 @@ def build_review_markdown(context: dict[str, Any]) -> str:
 
     if session:
         lines.extend(["", "## FIT session_summary JSON", "```json", json.dumps(session, ensure_ascii=False, separators=(",", ":")), "```"])
+
+    history = intervals.get("history") or {}
+    history_summary = markdown_history_summary(history)
+    if history_summary:
+        lines.extend(["", "## Training History Summary"])
+        lines.extend(history_summary)
+    ride_history = history.get("ride_history_14d") or []
+    if ride_history:
+        lines.extend(["", "## Past 14 Days Ride History"])
+        lines.extend(markdown_history_ride_table(ride_history))
+    weekly_history = history.get("weekly_summary_42d") or []
+    if weekly_history:
+        lines.extend(["", "## Past 42 Days Weekly Summary"])
+        lines.extend(markdown_weekly_history_table(weekly_history))
+    if history.get("source_note"):
+        lines.extend(["", f"- History source note: {history.get('source_note')}"])
 
     return "\n".join(lines)
 

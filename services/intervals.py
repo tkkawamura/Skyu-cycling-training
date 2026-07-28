@@ -126,7 +126,7 @@ class IntervalsClient:
             "fit_download_info": fit_download_info,
             "wellness_debug": self._wellness_debug(wellness, latest_ride),
             "trend": trend,
-            "recent_activities": activities[:12],
+            "recent_activities": activities[:80],
         }
 
     def get_wellness(self, oldest: date, newest: date) -> list[dict[str, Any]]:
