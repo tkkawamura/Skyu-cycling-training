@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v24"
+APP_VERSION = "2026-11-09-claude-nutrition-v25"
 
 FUELING_SETS = {
     "高強度": (
@@ -71,15 +71,16 @@ FUELING_MEMO_MD = """
 - 起床直後・練習前：プロテイン50%＋水200ml＋コーヒー100ml＋ベータアラニン1.65g＋塩1g＋MD10g、バナナ1本
 - 練習中：1Lボトル（水＋MD40g＋EAA5g＋塩0.5g）、650mlボトル（水＋パラチノース20g＋EAA5g）
 
-**■ 低強度90分内（1時間半以内低強度）**：147kcal / P11.2g / F0.4g / C25.2g
+**■ 低強度（1時間半以内低強度）**：147kcal / P11.2g / F0.4g / C25.2g
 - 起床直後・練習前：プロテイン50%＋水100ml＋コーヒー100ml＋ベータアラニン1.65g＋塩0.5g
 - 練習中：650mlボトル（水＋パラチノース20g＋EAA5g）
 """
 
+FUELING_PHOTO = "カロミル写真"
 SHORT_LABELS = {
     "高強度": "高強度",
     "2時間のZ2またはZ2上側": "Z2 2時間",
-    "1時間半以内低強度": "低強度90分内",
+    "1時間半以内低強度": "低強度",
     "低強度もしくはレスト": "低強度・レスト",
 }
 TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
@@ -109,7 +110,7 @@ def main() -> None:
             st.markdown(FUELING_MEMO_MD)
         fueling_set = st.segmented_control(
             "トレーニング前・中の補給",
-            list(FUELING_SETS),
+            [*FUELING_SETS, FUELING_PHOTO],
             format_func=lambda option: SHORT_LABELS.get(option, option),
             label_visibility="collapsed",
         )
@@ -127,7 +128,9 @@ def main() -> None:
         uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
         submitted = st.form_submit_button("Claude貼り付け用テキストを生成", type="primary", use_container_width=True)
 
-    if submitted:
+    if submitted and not fueling_set:
+        st.error("トレーニング前・中の補給を選んでください（カロミルの写真を添付する日は「カロミル写真」）。")
+    elif submitted:
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
             context = generate_context(
                 lookback_days=int(lookback_days),
@@ -933,6 +936,11 @@ def inject_styles() -> None:
             border: 1px solid #4A505B !important;
         }
         [data-testid="stBaseButton-segmented_control"],
+        [data-testid="stBaseButton-segmented_controlActive"] {
+            padding-left: 0.7rem !important;
+            padding-right: 0.7rem !important;
+        }
+        [data-testid="stBaseButton-segmented_control"],
         [data-testid="stBaseButton-segmented_control"] p {
             background-color: var(--coach-panel) !important;
             color: var(--coach-text) !important;
@@ -1471,7 +1479,11 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"  - 追加・変更: {display(manual.get('fueling_extra'))}",
         f"  - 糖質調整: {manual.get('carb_adjust_g') or 0:+d}g（1g=4kcalで換算）",
         f"  - 糖質調整後の合計: {display(manual.get('fueling_set_totals_adjusted') or manual.get('fueling_set_totals'))}",
-        "  - カロミルのスクリーンショットが添付されている場合は、そちらを優先（上記パターンは画像がない日の簡易版）",
+        (
+            "  - カロミル写真を添付：補給のkcal・PFCは添付画像を参照（このテキストには数値なし）"
+            if manual.get("fueling_set") == FUELING_PHOTO
+            else "  - カロミルのスクリーンショットが添付されている場合は、そちらを優先（上記パターンは画像がない日の簡易版）"
+        ),
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
         f"- 今日の活動: {display(manual.get('day_type'))}",
         "",
@@ -2093,7 +2105,7 @@ def build_chatgpt_prompt() -> str:
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
         "- 翌朝が超早朝練習のため、夕食までの炭水化物は明日のトレーニング内容に合わせて決めてください。低強度・レスト前でも炭水化物を減らしすぎないでください。\n"
-        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。画像がない場合は、「補給と翌日予定」の「糖質調整後の合計」をベースに使ってください（推定し直さない）。「追加・変更」に書かれた内容（バナナなし、ジェル追加など）があれば、その分だけ加減して補給分を確定させてください。パターン未選択で糖質調整だけある場合は、調整量をそのまま補給分として扱ってください。\n"
+        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。補給が「カロミル写真」なのに画像が添付されていない場合は、補給量を推定せず、画像を添付するよう依頼してください。画像がない場合は、「補給と翌日予定」の「糖質調整後の合計」をベースに使ってください（推定し直さない）。「追加・変更」に書かれた内容（バナナなし、ジェル追加など）があれば、その分だけ加減して補給分を確定させてください。パターン未選択で糖質調整だけある場合は、調整量をそのまま補給分として扱ってください。\n"
         "- 今日の目標から、トレーニング前・中の補給分を差し引いた残り（朝食後〜夕食）のkcal・P・F・Cを出し、食べ方の例を簡潔に添えてください。\n\n"
         "出力順:\n"
         "1. 結論\n"
