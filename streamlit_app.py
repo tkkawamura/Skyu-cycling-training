@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v17"
+APP_VERSION = "2026-11-09-claude-nutrition-v18"
 
 FUELING_SETS = {
     "高強度": (
@@ -46,6 +46,12 @@ GOAL_LABEL = "富士ヒル75分"
 TARGET_FTP_W = 280
 TARGET_BODY_MASS_KG = 60.0
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
+SHORT_LABELS = {
+    "高強度": "高強度",
+    "2時間のZ2またはZ2上側": "Z2 2時間",
+    "1時間半以内低強度": "低強度90分内",
+    "低強度もしくはレスト": "低強度・レスト",
+}
 TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
 DETAILED_HISTORY_DAYS = 14
 LONG_HISTORY_DAYS = 42
@@ -68,8 +74,16 @@ def main() -> None:
     w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
     subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
-    fueling_set = st.selectbox("トレーニング前・中の補給（カロミル画像がない日用）", list(FUELING_SETS), index=None, placeholder="補給パターンを選択")
-    tomorrow_plan = st.selectbox("明日のトレーニング", TOMORROW_OPTIONS, index=None, placeholder="明日のメニューを選択")
+    fueling_set = st.segmented_control(
+        "トレーニング前・中の補給（カロミル画像がない日用）",
+        list(FUELING_SETS),
+        format_func=lambda option: SHORT_LABELS.get(option, option),
+    )
+    tomorrow_plan = st.segmented_control(
+        "明日のトレーニング",
+        TOMORROW_OPTIONS,
+        format_func=lambda option: SHORT_LABELS.get(option, option),
+    )
     day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
 
     uploaded_file = None
