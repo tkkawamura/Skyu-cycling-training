@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v23"
+APP_VERSION = "2026-11-09-claude-nutrition-v24"
 
 FUELING_SETS = {
     "高強度": (
@@ -1029,8 +1029,20 @@ def inject_styles() -> None:
         [data-testid="stNumberInputContainer"] > div:has(> [data-testid="stNumberInputStepDown"]) {
             display: contents !important;
         }
+        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepDown"],
+        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepUp"] {
+            width: 3rem !important;
+            min-width: 3rem !important;
+            height: auto !important;
+            align-self: stretch !important;
+            background-color: #3A3F48 !important;
+            color: #FFFFFF !important;
+            font-size: 1.2rem !important;
+        }
         [data-testid="stNumberInputStepDown"] {
             order: 0 !important;
+            border-right: 1px solid #5A616D !important;
+            border-radius: 0.5rem 0 0 0.5rem !important;
         }
         [data-testid="stNumberInputContainer"] > [data-baseweb="input"] {
             order: 1 !important;
@@ -1042,6 +1054,8 @@ def inject_styles() -> None:
         }
         [data-testid="stNumberInputStepUp"] {
             order: 2 !important;
+            border-left: 1px solid #5A616D !important;
+            border-radius: 0 0.5rem 0.5rem 0 !important;
         }
         [data-testid="InputInstructions"] {
             display: none !important;
