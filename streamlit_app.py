@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v20"
+APP_VERSION = "2026-11-09-claude-nutrition-v21"
 
 FUELING_SETS = {
     "高強度": (
@@ -46,16 +46,30 @@ GOAL_LABEL = "富士ヒル75分"
 TARGET_FTP_W = 280
 TARGET_BODY_MASS_KG = 60.0
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
+FUELING_TOTALS = {
+    "高強度": {"kcal": 525, "p": 12.1, "f": 0.6, "c": 119.6},
+    "2時間のZ2またはZ2上側": {"kcal": 411, "p": 12.1, "f": 0.6, "c": 91.0},
+    "1時間半以内低強度": {"kcal": 147, "p": 11.2, "f": 0.4, "c": 25.2},
+}
+
+
+def fueling_totals_text(name: str | None) -> str | None:
+    totals = FUELING_TOTALS.get(name or "")
+    if not totals:
+        return None
+    return f"{totals['kcal']}kcal / P{totals['p']}g / F{totals['f']}g / C{totals['c']}g"
+
+
 FUELING_MEMO_MD = """
-**■ 高強度**
+**■ 高強度**：525kcal / P12.1g / F0.6g / C119.6g
 - 起床直後・練習前：プロテイン50%＋水200ml＋コーヒー100ml＋ベータアラニン1.65g＋塩1g＋MD20g、バナナ1本
 - 練習中：1Lボトル（水＋MD60g＋EAA5g＋塩0.5g）、650mlボトル（水＋パラチノース20g＋EAA5g＋塩0.5g）
 
-**■ Z2 2時間（2時間のZ2またはZ2上側）**
+**■ Z2 2時間（2時間のZ2またはZ2上側）**：411kcal / P12.1g / F0.6g / C91.0g
 - 起床直後・練習前：プロテイン50%＋水200ml＋コーヒー100ml＋ベータアラニン1.65g＋塩1g＋MD10g、バナナ1本
 - 練習中：1Lボトル（水＋MD40g＋EAA5g＋塩0.5g）、650mlボトル（水＋パラチノース20g＋EAA5g）
 
-**■ 低強度90分内（1時間半以内低強度）**
+**■ 低強度90分内（1時間半以内低強度）**：147kcal / P11.2g / F0.4g / C25.2g
 - 起床直後・練習前：プロテイン50%＋水100ml＋コーヒー100ml＋ベータアラニン1.65g＋塩0.5g
 - 練習中：650mlボトル（水＋パラチノース20g＋EAA5g）
 """
@@ -123,6 +137,7 @@ def main() -> None:
                     "subjective_note": subjective_note.strip() or None,
                     "fueling_set": fueling_set,
                     "fueling_set_detail": FUELING_SETS.get(fueling_set) if fueling_set else None,
+                    "fueling_set_totals": fueling_totals_text(fueling_set),
                     "tomorrow_plan": tomorrow_plan,
                     "day_type": DAY_TYPES.get(day_type or "デスクワーク"),
                 },
@@ -1395,6 +1410,7 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         "",
         "## 補給と翌日予定",
         f"- トレーニング前・中の補給: {display(manual.get('fueling_set'))}",
+        f"  - 合計（カロミル登録値）: {display(manual.get('fueling_set_totals'))}",
         f"  - 内容: {display(manual.get('fueling_set_detail'))}",
         "  - カロミルのスクリーンショットが添付されている場合は、そちらを優先（上記パターンは画像がない日の簡易版）",
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
@@ -2018,7 +2034,7 @@ def build_chatgpt_prompt() -> str:
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
         "- 翌朝が超早朝練習のため、夕食までの炭水化物は明日のトレーニング内容に合わせて決めてください。低強度・レスト前でも炭水化物を減らしすぎないでください。\n"
-        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。画像がない場合だけ、「補給と翌日予定」で選んだパターンの内容から見積もり、推定値であることを明記してください。\n"
+        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。画像がない場合は、「補給と翌日予定」で選んだパターンの「合計（カロミル登録値）」のkcal・P・F・Cをそのまま補給分として使ってください（推定し直さない）。\n"
         "- 今日の目標から、トレーニング前・中の補給分を差し引いた残り（朝食後〜夕食）のkcal・P・F・Cを出し、食べ方の例を簡潔に添えてください。\n\n"
         "出力順:\n"
         "1. 結論\n"
