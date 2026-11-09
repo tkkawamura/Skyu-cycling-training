@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v11"
+APP_VERSION = "2026-11-09-claude-nutrition-v12"
 
 FUELING_SETS = {
     "高強度": (
@@ -74,8 +74,7 @@ def main() -> None:
     day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
 
     uploaded_file = None
-    with st.expander("FIT / JSONを手動で読み込む（予備）"):
-        uploaded_file = st.file_uploader("FIT / JSON", label_visibility="collapsed")
+    uploaded_file = st.file_uploader("FIT / JSON（予備）", label_visibility="collapsed")
 
     if st.button("Claude貼り付け用テキストを生成", type="primary", use_container_width=True):
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
@@ -936,7 +935,9 @@ def inject_styles() -> None:
             gap: 0.6rem !important;
         }
         [data-testid="stFileUploaderDropzone"] {
-            padding: 0.4rem 0.6rem !important;
+            padding: 0 !important;
+            background-color: transparent !important;
+            border: none !important;
         }
         .metric-grid {
             display: grid;
