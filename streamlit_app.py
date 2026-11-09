@@ -23,7 +23,7 @@ from services.nutrition import compute_day_plan
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v29"
+APP_VERSION = "2026-11-09-claude-nutrition-v30"
 
 FUELING_SETS = {
     "高強度": (
@@ -115,9 +115,8 @@ def main() -> None:
             format_func=lambda option: SHORT_LABELS.get(option, option),
             label_visibility="collapsed",
         )
-        extra_cols = st.columns([3, 2], gap="small")
-        fueling_extra = extra_cols[0].text_input("補給の追加・変更（任意）", value="", placeholder="例: バナナなし / ジェル追加")
-        carb_adjust_g = extra_cols[1].number_input("糖質調整（g）", min_value=-200, max_value=200, value=0, step=5, format="%d")
+        extra_cols = st.columns([2, 3], gap="small")
+        carb_adjust_g = extra_cols[0].number_input("糖質調整（g）", min_value=-200, max_value=200, value=0, step=5, format="%d")
         tomorrow_plan = st.segmented_control(
             "明日のトレーニング",
             TOMORROW_OPTIONS,
@@ -148,7 +147,6 @@ def main() -> None:
                     "fueling_set": fueling_set,
                     "fueling_set_detail": FUELING_SETS.get(fueling_set) if fueling_set else None,
                     "fueling_set_totals": fueling_totals_text(fueling_set),
-                    "fueling_extra": fueling_extra.strip() or None,
                     "carb_adjust_g": int(carb_adjust_g) if carb_adjust_g else 0,
                     "fueling_set_totals_adjusted": fueling_totals_text(fueling_set, carb_adjust_g) if carb_adjust_g else None,
                     "tomorrow_plan": tomorrow_plan,
@@ -374,8 +372,6 @@ def fueling_basis_line(manual: dict[str, Any]) -> str:
             text = f"「{label}」パターン（カロミル登録値 {base['kcal']}kcal・C{base['c']}g）のまま（調整なし）"
         else:
             text = f"パターンなし、アプリで糖質{adjust:+d}g"
-    if manual.get("fueling_extra"):
-        text += f"／追加・変更メモ：{manual.get('fueling_extra')}（表には未反映）"
     return f"※トレーニング補給：{text}"
 
 
@@ -1586,7 +1582,6 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"- トレーニング前・中の補給: {display(manual.get('fueling_set'))}",
         f"  - **補給の確定値（栄養計算にはこの値を使う）: {display(manual.get('fueling_set_totals_adjusted') or manual.get('fueling_set_totals'))}**",
         f"  - 内訳: カロミル登録値 {display(manual.get('fueling_set_totals'))} に、糖質調整 {manual.get('carb_adjust_g') or 0:+d}g（1g=4kcalで換算）を反映済み",
-        f"  - 追加・変更（確定値に未反映。ある場合だけ加減する）: {display(manual.get('fueling_extra'))}",
         f"  - 内容: {display(manual.get('fueling_set_detail'))}",
         (
             "  - カロミル写真を添付：補給のkcal・PFCは添付画像を参照（このテキストには数値なし）"
@@ -2216,7 +2211,6 @@ def build_chatgpt_prompt() -> str:
         "- 表の後に「食べ方の例（量は目安）」を、朝・昼・夕1行ずつ、各食の数値に合う内容で書いてください。間食は作らないでください。\n"
         "- 最後に、明日のトレーニングに向けた炭水化物の考え方を1〜2行で書いてください。\n"
         "- 「食事メモ」に記載がある日だけ、表の下に調整案を別記してかまいません。その場合も元の表は変えないでください。\n"
-        "- 「追加・変更メモ」は表に反映されていません。内容があれば、その影響を1行で補足してください（表は変えない）。\n"
         "- カロミルのスクリーンショットが添付された日で、画像の値と表の補給値が違えば、その違いを指摘するだけにしてください。\n"
         "- 補給が「カロミル写真」の日だけは例外です。トレーニング補給の行を画像のkcal・P・F・Cで埋め、残り＝今日の目標−補給（整数に丸め、0未満は0）を、次のルールで朝昼夕に分けてください：Pは朝・昼が残り÷3を5g単位、夕は残り／Fは朝が残り×25%を5g単位、昼が(残り−朝)÷2を5g単位、夕は残り／Cは※計算の行のC配分で朝・昼を5g単位、夕は残り／各食kcal＝P×4+F×9+C×4を10kcal単位、夕kcalは残りkcal−朝−昼。画像がない場合は推定せず、画像を求めてください。\n\n"
         "出力順:\n"
