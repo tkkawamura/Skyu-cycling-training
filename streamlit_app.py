@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v7"
+APP_VERSION = "2026-11-09-claude-nutrition-v8"
 
 FUELING_SETS = {
     "高強度": (
@@ -38,6 +38,14 @@ FUELING_SETS = {
         "練習中: 650mlボトル（水+パラチノース20g+EAA5g）"
     ),
 }
+DAY_TYPES = {
+    "デスクワーク": "デスクワーク日（約3,000歩、生活分1,750kcal）",
+    "外出": "外出日（約10,000歩、生活分1,950kcal、炭水化物+50g）",
+}
+GOAL_LABEL = "富士ヒル75分"
+TARGET_FTP_W = 280
+TARGET_BODY_MASS_KG = 60.0
+CLAUDE_OPEN_URL = "https://claude.ai/"
 TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
 DETAILED_HISTORY_DAYS = 14
 LONG_HISTORY_DAYS = 42
@@ -59,13 +67,15 @@ def main() -> None:
     max_hr = int(to_float(metrics.get("max_heart_rate")) or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
     w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
-    subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=110)
+    subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
     fueling_set = st.selectbox("トレーニング前・中の補給", list(FUELING_SETS), index=None, placeholder="補給パターンを選択")
     fueling_extra = st.text_input("補給の追加・変更（任意）", value="", placeholder="例: バナナ抜き / ジェル1個追加")
     tomorrow_plan = st.selectbox("明日のトレーニング", TOMORROW_OPTIONS, index=None, placeholder="明日のメニューを選択")
+    day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
 
     uploaded_file = None
-    uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
+    with st.expander("FIT / JSONを手動で読み込む（予備）"):
+        uploaded_file = st.file_uploader("FIT / JSON", label_visibility="collapsed")
 
     if st.button("Claude貼り付け用テキストを生成", type="primary", use_container_width=True):
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
@@ -84,6 +94,7 @@ def main() -> None:
                     "fueling_set_detail": FUELING_SETS.get(fueling_set) if fueling_set else None,
                     "fueling_extra": fueling_extra.strip() or None,
                     "tomorrow_plan": tomorrow_plan,
+                    "day_type": DAY_TYPES.get(day_type or "デスクワーク"),
                 },
                 intervals_snapshot=intervals_snapshot,
                 include_prompt=True,
@@ -817,6 +828,11 @@ def inject_styles() -> None:
         [data-testid="stFileUploaderDropzoneInstructions"] {
             display: none !important;
         }
+        [data-testid="stExpander"] details, [data-testid="stExpander"] summary {
+            background-color: var(--coach-panel) !important;
+            color: var(--coach-text) !important;
+            border-color: #3A3F48 !important;
+        }
         [data-testid="stVerticalBlock"] {
             gap: 0.6rem !important;
         }
@@ -1149,7 +1165,10 @@ def render_copy_box(text: str) -> None:
           <button id="copyButton" style="width:100%;padding:12px 16px;border:0;border-radius:6px;background:#FC6719;color:white;font-weight:700;font-size:16px;">
             ワンタップでコピー
           </button>
-          <div id="copyStatus" style="margin:8px 0;color:#0a7f32;font-size:14px;"></div>
+          <a href="{CLAUDE_OPEN_URL}" target="_blank" rel="noopener" style="display:block;box-sizing:border-box;width:100%;margin-top:8px;padding:12px 16px;border:1px solid #FC6719;border-radius:6px;color:#FC6719;text-align:center;font-weight:700;font-size:16px;text-decoration:none;">
+            Claudeを開く
+          </a>
+          <div id="copyStatus" style="margin:8px 0;color:#5BD08A;font-size:14px;"></div>
           <textarea id="copyText" readonly style="width:100%;height:280px;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:12px;font-size:13px;line-height:1.45;">{escaped_text}</textarea>
         </div>
         <script>
@@ -1169,7 +1188,7 @@ def render_copy_box(text: str) -> None:
         }});
         </script>
         """,
-        height=390,
+        height=450,
     )
 
 
@@ -1209,6 +1228,10 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"  - 内容: {display(manual.get('fueling_set_detail'))}",
         f"  - 追加・変更: {display(manual.get('fueling_extra'))}",
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
+        f"- 今日の活動: {display(manual.get('day_type'))}",
+        "",
+        "## 目標進捗",
+        *markdown_goal_progress(metrics, athlete_inputs),
         "",
         "## Intervals.icu コンディション",
         "|項目|値|",
@@ -1320,6 +1343,34 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         lines.extend(["", f"- History source note: {history.get('source_note')}"])
 
     return "\n".join(lines)
+
+
+def markdown_goal_progress(metrics: dict[str, Any], athlete_inputs: dict[str, Any]) -> list[str]:
+    ftp = to_float(metrics.get("ftp")) or to_float(athlete_inputs.get("critical_power_w"))
+    weight = to_float(metrics.get("weight")) or to_float(athlete_inputs.get("body_mass_kg"))
+    target_wkg = TARGET_FTP_W / TARGET_BODY_MASS_KG
+    current_wkg = ftp / weight if ftp and weight else None
+    rows = [
+        f"- 目標: {GOAL_LABEL}（FTP {TARGET_FTP_W}W・体重{TARGET_BODY_MASS_KG:.0f}kg = {target_wkg:.2f}W/kg）",
+        "|項目|現在|目標|差|",
+        "|---|---:|---:|---:|",
+        "|FTP|{cur}|{tgt}W|{diff}|".format(
+            cur=format_int_unit(ftp, "W") or "-",
+            tgt=TARGET_FTP_W,
+            diff=f"{ftp - TARGET_FTP_W:+.0f}W" if ftp else "-",
+        ),
+        "|体重|{cur}|{tgt:.1f}kg|{diff}|".format(
+            cur=format_unit(format_decimal(weight, 1), "kg") or "-",
+            tgt=TARGET_BODY_MASS_KG,
+            diff=f"{weight - TARGET_BODY_MASS_KG:+.1f}kg" if weight else "-",
+        ),
+        "|W/kg|{cur}|{tgt:.2f}|{diff}|".format(
+            cur=format_decimal(current_wkg, 2) or "-",
+            tgt=target_wkg,
+            diff=f"{current_wkg - target_wkg:+.2f}" if current_wkg else "-",
+        ),
+    ]
+    return rows
 
 
 def markdown_physiology(fit: dict[str, Any] | None) -> list[str]:
@@ -1786,6 +1837,7 @@ def build_chatgpt_prompt() -> str:
         "- 医療・診断ではなく、トレーニング上の示唆に限定してください。\n"
         "- 表と短い箇条書きを使い、要点を短く伝えてください。\n\n"
         "栄養ルール:\n"
+        "- デスクワーク日か外出日かは「今日の活動」の値に従ってください。\n"
         "- 目標kcal = 生活分（デスクワーク日1,750 / 外出日1,950）+ 今日のライド仕事量kJ - 300〜400kcal（レスト日は-0〜200）。\n"
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
@@ -1802,7 +1854,8 @@ def build_chatgpt_prompt() -> str:
         "7. 次回提案\n"
         "8. 判断できないこと\n"
         "9. 追加で必要な情報\n"
-        "10. 今日の栄養（目標kcal・PFC、補給を差し引いた残り、朝昼夕の食べ方例、明日に向けた炭水化物の考え方）\n\n"
+        "10. 今日の栄養（目標kcal・PFC、補給を差し引いた残り、朝昼夕の食べ方例、明日に向けた炭水化物の考え方）\n"
+        "11. 目標進捗（目標進捗の表をもとに、目標までの距離と今日のセッションの位置づけを2〜3行で）\n\n"
         "主要区間表には、区間ID、時間、mean/weighted power、HR、cadence/speed、EF/デカップリング、W′、pedaling dynamics有無を、利用可能な範囲で入れてください。"
     )
 
