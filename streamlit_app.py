@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v6"
+APP_VERSION = "2026-11-09-claude-nutrition-v7"
 
 FUELING_SETS = {
     "高強度": (
@@ -741,6 +741,9 @@ def inject_styles() -> None:
             --coach-text: #F2F3F5;
             --coach-muted: #A7ADB8;
             --coach-orange: #FC6719;
+        }
+        .stApp *:not([data-testid="stIconMaterial"]), .app-title {
+            font-family: "Meiryo", "メイリオ", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif !important;
         }
         .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
             background-color: var(--coach-bg) !important;
