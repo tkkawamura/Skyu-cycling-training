@@ -21,7 +21,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v3"
+APP_VERSION = "2026-11-09-claude-nutrition-v4"
 
 FUELING_SETS = {
     "高強度": (
@@ -58,13 +58,13 @@ def main() -> None:
     max_hr = int(to_float(metrics.get("max_heart_rate")) or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
     w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
-    subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など")
+    subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=110)
     fueling_set = st.selectbox("トレーニング前・中の補給", list(FUELING_SETS), index=None, placeholder="補給パターンを選択")
     fueling_extra = st.text_input("補給の追加・変更（任意）", value="", placeholder="例: バナナ抜き / ジェル1個追加")
     tomorrow_plan = st.selectbox("明日のトレーニング", TOMORROW_OPTIONS, index=None, placeholder="明日のメニューを選択")
 
     uploaded_file = None
-    uploaded_file = st.file_uploader("FITファイルまたは生成済みJSON（自動取得できない場合のみ）")
+    uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
 
     if st.button("Claude貼り付け用テキストを生成", type="primary", use_container_width=True):
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
@@ -725,14 +725,28 @@ def inject_styles() -> None:
     st.markdown(
         """
         <style>
-        .block-container {
-            padding-top: 1.25rem;
+        header[data-testid="stHeader"] {
+            display: none;
         }
-        .app-title {
-            font-size: 1.8rem;
-            line-height: 1.25;
+        .block-container, [data-testid="stMainBlockContainer"] {
+            padding-top: 1.25rem !important;
+            padding-bottom: 2rem !important;
+        }
+        h1.app-title {
+            font-size: 1.8rem !important;
+            line-height: 1.25 !important;
             font-weight: 700;
-            margin: 0 0 1.2rem;
+            padding: 0 !important;
+            margin: 0 0 0.2rem !important;
+        }
+        [data-testid="stFileUploaderDropzoneInstructions"] {
+            display: none !important;
+        }
+        [data-testid="stVerticalBlock"] {
+            gap: 0.6rem !important;
+        }
+        [data-testid="stFileUploaderDropzone"] {
+            padding: 0.4rem 0.6rem !important;
         }
         .metric-grid {
             display: grid;
@@ -760,14 +774,13 @@ def inject_styles() -> None:
             white-space: nowrap;
         }
         @media (max-width: 640px) {
-            .block-container {
-                padding-left: 0.85rem;
-                padding-right: 0.85rem;
-                padding-top: 0.8rem;
+            .block-container, [data-testid="stMainBlockContainer"] {
+                padding-left: 0.85rem !important;
+                padding-right: 0.85rem !important;
+                padding-top: 0.8rem !important;
             }
-            .app-title {
-                font-size: 1.15rem;
-                margin-bottom: 0.9rem;
+            h1.app-title {
+                font-size: 1.5rem !important;
             }
             .metric-grid {
                 grid-template-columns: repeat(3, minmax(0, 1fr));
