@@ -21,15 +21,31 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v1"
+APP_VERSION = "2026-11-09-claude-nutrition-v2"
+
+FUELING_SETS = {
+    "高強度": (
+        "起床直後練習前: プロテイン50%+水200ml+コーヒー100ml+ベータアラニン1.65g+塩1g+MD20g、バナナ1本 / "
+        "練習中: 1Lボトル（水+MD60g+EAA5g+塩0.5g）、650mlボトル（水+パラチノース20g+EAA5g+塩0.5g）"
+    ),
+    "2時間のZ2またはZ2上側": (
+        "起床直後練習前: プロテイン50%+水200ml+コーヒー100ml+ベータアラニン1.65g+塩1g+MD10g、バナナ1本 / "
+        "練習中: 1Lボトル（水+MD40g+EAA5g+塩0.5g）、650mlボトル（水+パラチノース20g+EAA5g）"
+    ),
+    "1時間半以内低強度": (
+        "起床直後練習前: プロテイン50%+水100ml+コーヒー100ml+ベータアラニン1.65g+塩0.5g / "
+        "練習中: 650mlボトル（水+パラチノース20g+EAA5g）"
+    ),
+}
+TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
 DETAILED_HISTORY_DAYS = 14
 LONG_HISTORY_DAYS = 42
 
 
 def main() -> None:
-    st.set_page_config(page_title="トレーニングコーチJSONジェネレータ", layout="wide")
+    st.set_page_config(page_title="S級コーチ", layout="wide")
     inject_styles()
-    st.markdown('<h1 class="app-title">トレーニングコーチJSONジェネレータ</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="app-title">S級コーチ</h1>', unsafe_allow_html=True)
     st.caption(f"アプリ版: {APP_VERSION}")
 
     lookback_days = max(LONG_HISTORY_DAYS, int_setting("LOOKBACK_DAYS", LONG_HISTORY_DAYS))
@@ -44,13 +60,9 @@ def main() -> None:
 
     st.subheader("主観入力")
     subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など")
-    fueling_note = st.text_area(
-        "トレーニング前・中の補給",
-        value="",
-        placeholder="例: いつもの高強度セット / いつもの低強度セット（バナナ抜き） / ルーティン外の物があれば内容",
-        height=80,
-    )
-    tomorrow_plan = st.text_input("明日のトレーニング", value="", placeholder="例: JETT / Z2 60分 / レスト")
+    fueling_set = st.selectbox("トレーニング前・中の補給", list(FUELING_SETS), index=None, placeholder="補給パターンを選択")
+    fueling_extra = st.text_input("補給の追加・変更（任意）", value="", placeholder="例: バナナ抜き / ジェル1個追加")
+    tomorrow_plan = st.selectbox("明日のトレーニング", TOMORROW_OPTIONS, index=None, placeholder="明日のメニューを選択")
 
     uploaded_file = None
     uploaded_file = st.file_uploader("FITファイルまたは生成済みJSON（自動取得できない場合のみ）")
@@ -68,8 +80,10 @@ def main() -> None:
                 uploaded_file=uploaded_file,
                 manual_inputs={
                     "subjective_note": subjective_note.strip() or None,
-                    "fueling_note": fueling_note.strip() or None,
-                    "tomorrow_plan": tomorrow_plan.strip() or None,
+                    "fueling_set": fueling_set,
+                    "fueling_set_detail": FUELING_SETS.get(fueling_set) if fueling_set else None,
+                    "fueling_extra": fueling_extra.strip() or None,
+                    "tomorrow_plan": tomorrow_plan,
                 },
                 intervals_snapshot=intervals_snapshot,
                 include_prompt=True,
@@ -1104,7 +1118,9 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         display(manual.get("subjective_note")),
         "",
         "## 補給と翌日予定",
-        f"- トレーニング前・中の補給: {display(manual.get('fueling_note'))}",
+        f"- トレーニング前・中の補給: {display(manual.get('fueling_set'))}",
+        f"  - 内容: {display(manual.get('fueling_set_detail'))}",
+        f"  - 追加・変更: {display(manual.get('fueling_extra'))}",
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
         "",
         "## Intervals.icu コンディション",
@@ -1687,7 +1703,7 @@ def build_chatgpt_prompt() -> str:
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
         "- 翌朝が超早朝練習のため、夕食までの炭水化物は明日のトレーニング内容に合わせて決めてください。低強度・レスト前でも炭水化物を減らしすぎないでください。\n"
-        "- 「いつもの高強度セット」「いつもの低強度セット」などの補給は、本人が保存済みのルーティン内容として扱ってください。不明な場合は推定値であることを明記してください。\n"
+        "- 補給は「補給と翌日予定」の内容（選択したパターンの詳細と追加・変更）を使ってkcal・PFCを見積もってください。成分量が不明な食品は推定値であることを明記してください。\n"
         "- 今日の目標から、トレーニング前・中の補給分を差し引いた残り（朝食後〜夕食）のkcal・P・F・Cを出し、食べ方の例を簡潔に添えてください。\n\n"
         "出力順:\n"
         "1. 結論\n"
@@ -1751,7 +1767,7 @@ def run_app() -> None:
         main()
     except Exception as exc:
         try:
-            st.set_page_config(page_title="トレーニングコーチJSONジェネレータ", layout="wide")
+            st.set_page_config(page_title="S級コーチ", layout="wide")
         except Exception:
             pass
         st.error("アプリ起動時にエラーが発生しました。")
