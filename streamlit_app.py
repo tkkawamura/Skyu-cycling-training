@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v19"
+APP_VERSION = "2026-11-09-claude-nutrition-v20"
 
 FUELING_SETS = {
     "高強度": (
@@ -46,6 +46,20 @@ GOAL_LABEL = "富士ヒル75分"
 TARGET_FTP_W = 280
 TARGET_BODY_MASS_KG = 60.0
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
+FUELING_MEMO_MD = """
+**■ 高強度**
+- 起床直後・練習前：プロテイン50%＋水200ml＋コーヒー100ml＋ベータアラニン1.65g＋塩1g＋MD20g、バナナ1本
+- 練習中：1Lボトル（水＋MD60g＋EAA5g＋塩0.5g）、650mlボトル（水＋パラチノース20g＋EAA5g＋塩0.5g）
+
+**■ Z2 2時間（2時間のZ2またはZ2上側）**
+- 起床直後・練習前：プロテイン50%＋水200ml＋コーヒー100ml＋ベータアラニン1.65g＋塩1g＋MD10g、バナナ1本
+- 練習中：1Lボトル（水＋MD40g＋EAA5g＋塩0.5g）、650mlボトル（水＋パラチノース20g＋EAA5g）
+
+**■ 低強度90分内（1時間半以内低強度）**
+- 起床直後・練習前：プロテイン50%＋水100ml＋コーヒー100ml＋ベータアラニン1.65g＋塩0.5g
+- 練習中：650mlボトル（水＋パラチノース20g＋EAA5g）
+"""
+
 SHORT_LABELS = {
     "高強度": "高強度",
     "2時間のZ2またはZ2上側": "Z2 2時間",
@@ -75,10 +89,13 @@ def main() -> None:
 
     with st.form("coach_inputs", border=False):
         subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
+        with st.popover("トレーニング前・中の補給（それぞれのメニュー内訳はこちら）"):
+            st.markdown(FUELING_MEMO_MD)
         fueling_set = st.segmented_control(
-            "トレーニング前・中の補給（カロミル画像がない日用）",
+            "トレーニング前・中の補給",
             list(FUELING_SETS),
             format_func=lambda option: SHORT_LABELS.get(option, option),
+            label_visibility="collapsed",
         )
         tomorrow_plan = st.segmented_control(
             "明日のトレーニング",
@@ -947,6 +964,34 @@ def inject_styles() -> None:
             background-color: var(--coach-panel) !important;
             color: var(--coach-text) !important;
             border-color: #3A3F48 !important;
+        }
+        [data-testid="stPopover"] button, [data-testid="stPopoverButton"] {
+            background: transparent !important;
+            border: none !important;
+            padding: 0 !important;
+            min-height: 0 !important;
+            color: var(--coach-text) !important;
+            justify-content: flex-start !important;
+        }
+        [data-testid="stPopover"] button p {
+            font-size: 0.875rem !important;
+            color: var(--coach-orange) !important;
+            text-decoration: underline !important;
+            text-align: left !important;
+        }
+        [data-testid="stPopover"] button svg {
+            display: none !important;
+        }
+        [data-testid="stPopoverBody"] {
+            background-color: var(--coach-panel) !important;
+            color: var(--coach-text) !important;
+        }
+        [data-testid="stPopoverBody"] * {
+            background-color: transparent !important;
+        }
+        [data-testid="stPopoverBody"] p, [data-testid="stPopoverBody"] li, [data-testid="stPopoverBody"] strong {
+            color: var(--coach-text) !important;
+            font-size: 0.9rem !important;
         }
         [data-testid="stVerticalBlock"] {
             gap: 0.6rem !important;
