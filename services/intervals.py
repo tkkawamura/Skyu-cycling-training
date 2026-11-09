@@ -355,6 +355,7 @@ class IntervalsClient:
             "moving_time": number(first_value(item, "moving_time", "Moving Time", "elapsed_time", "elapsedTime", "duration", "moving_time_secs", "total_timer_time", "totalTimerTime")),
             "distance": normalize_distance_m(first_value(item, "distance", "Distance", "distance_m", "distanceMeters", "distance_meters", "total_distance", "totalDistance")),
             "training_load": number(first_value(item, "icu_training_load", "icuTrainingLoad", "training_load", "trainingLoad", "load", "Load", "tss", "TSS")),
+            "work_kj": joules_to_kj(first_value(item, "icu_joules", "joules", "work_joules")),
             "average_watts": number(first_value(item, "average_watts", "averageWatts", "Average Watts", "avg_power", "avgPower")),
             "weighted_average_watts": number(first_value(item, "weighted_average_watts", "weightedAverageWatts", "Weighted Average Watts", "normalized_power", "normalizedPower", "power")),
             "average_heartrate": number(first_value(item, "average_heartrate", "averageHeartrate", "average_heart_rate", "avg_hr", "avgHr", "Average Heart Rate")),
@@ -719,3 +720,10 @@ def is_fit_file(content: bytes) -> bool:
     if len(content) < 14:
         return False
     return content[8:12] == b".FIT" or b".FIT" in content[:32]
+
+
+def joules_to_kj(value: Any) -> float | None:
+    joules = number(value)
+    if joules is None:
+        return None
+    return round(joules / 1000, 1)

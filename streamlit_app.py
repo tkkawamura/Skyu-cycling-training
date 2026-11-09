@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v9"
+APP_VERSION = "2026-11-09-claude-nutrition-v10"
 
 FUELING_SETS = {
     "高強度": (
@@ -254,6 +254,7 @@ def generate_context(
         },
         "manual_inputs": manual_inputs,
         "intervals_icu": intervals_context,
+        "same_day_rides": build_same_day_rides(intervals_payload, compact_fit_context),
         "llm_review_summary": build_review_summary(intervals_context, compact_fit_context, manual_inputs),
         "fit_activity_context": compact_fit_context,
         "uploaded_json_context": uploaded_json_context if uploaded_json_context and fit_context is None else None,
@@ -263,6 +264,91 @@ def generate_context(
         },
     }
     return output
+
+
+def is_ride(activity: dict[str, Any]) -> bool:
+    sport = str(activity.get("type", "")).lower()
+    return "ride" in sport or "cycling" in sport or "bike" in sport
+
+
+def build_same_day_rides(intervals_payload: dict[str, Any], fit_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    latest = intervals_payload.get("latest_ride") or {}
+    latest_date = parse_app_date(latest.get("date") or latest.get("start_time"))
+    if not latest_date:
+        return None
+    fit_work_kj = to_float((((fit_context or {}).get("llm_summary") or {}).get("session_summary") or {}).get("total_work_kj"))
+    rides = []
+    activities = [item for item in (intervals_payload.get("recent_activities") or []) if isinstance(item, dict)]
+    if not any(str(item.get("id")) == str(latest.get("id")) for item in activities):
+        activities.append({**latest, "type": latest.get("type") or "Ride"})
+    for activity in activities:
+        if not isinstance(activity, dict) or not is_ride(activity):
+            continue
+        if parse_app_date(activity.get("date") or activity.get("start_time")) != latest_date:
+            continue
+        analyzed = str(activity.get("id")) == str(latest.get("id"))
+        work_kj = to_float(activity.get("work_kj"))
+        work_source = "intervals"
+        if analyzed and fit_work_kj is not None:
+            work_kj, work_source = fit_work_kj, "fit"
+        elif work_kj is None:
+            avg_w = to_float(activity.get("average_watts"))
+            secs = to_float(activity.get("moving_time"))
+            if avg_w is not None and secs is not None:
+                work_kj, work_source = round(avg_w * secs / 1000, 1), "estimated_avg_power_x_time"
+            else:
+                work_source = "unknown"
+        rides.append(
+            {
+                "id": activity.get("id"),
+                "start_time": activity.get("start_time"),
+                "name": activity.get("name"),
+                "moving_time_s": to_float(activity.get("moving_time")),
+                "training_load": to_float(activity.get("training_load")),
+                "average_watts": to_float(activity.get("average_watts")),
+                "weighted_average_watts": to_float(activity.get("weighted_average_watts")),
+                "work_kj": work_kj,
+                "work_kj_source": work_source,
+                "detailed_fit_analysis": analyzed,
+            }
+        )
+    rides.sort(key=lambda item: str(item.get("start_time") or ""))
+    total = sum(value for item in rides if (value := to_float(item.get("work_kj"))) is not None)
+    return {
+        "date": latest_date.isoformat(),
+        "ride_count": len(rides),
+        "total_work_kj": round(total, 1) if rides else None,
+        "rides": rides,
+    }
+
+
+def markdown_same_day_rides(same_day: dict[str, Any] | None) -> list[str]:
+    if not same_day or not same_day.get("rides"):
+        return []
+    rows = [
+        f"- 対象日: {same_day.get('date')} / ライド数: {same_day.get('ride_count')}本 / 合計仕事量: {format_int_unit(same_day.get('total_work_kj'), 'kJ') or '-'}",
+        "- 詳細なFIT解析は「詳細解析=○」の1本のみ。栄養計算のライドkJは合計仕事量を使う。",
+        "|開始|名前|時間|TSS|平均P|加重P|仕事量|詳細解析|",
+        "|---|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for ride in same_day["rides"]:
+        work = format_int_unit(ride.get("work_kj"), "kJ") or "-"
+        if ride.get("work_kj_source") == "estimated_avg_power_x_time":
+            work += "（推定）"
+        start = str(ride.get("start_time") or "-").replace("T", " ")[:16]
+        rows.append(
+            "|{start}|{name}|{time}|{tss}|{avgp}|{wp}|{work}|{flag}|".format(
+                start=start,
+                name=display(ride.get("name")),
+                time=format_minutes(ride.get("moving_time_s")) or "-",
+                tss=format_int(ride.get("training_load")) or "-",
+                avgp=format_int_unit(ride.get("average_watts"), "W") or "-",
+                wp=format_int_unit(ride.get("weighted_average_watts"), "W") or "-",
+                work=work,
+                flag="○" if ride.get("detailed_fit_analysis") else "-",
+            )
+        )
+    return rows
 
 
 def download_fit_on_demand(intervals_payload: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
@@ -1260,6 +1346,11 @@ def build_review_markdown(context: dict[str, Any]) -> str:
     for row in compact_latest_ride(ride):
         lines.append(f"|{row['項目']}|{row['値']}|")
 
+    same_day_lines = markdown_same_day_rides(context.get("same_day_rides"))
+    if same_day_lines:
+        lines.extend(["", "## 同日のライド"])
+        lines.extend(same_day_lines)
+
     lines.extend(
         [
             "",
@@ -1838,6 +1929,7 @@ def build_chatgpt_prompt() -> str:
         "- 表と短い箇条書きを使い、要点を短く伝えてください。\n\n"
         "栄養ルール:\n"
         "- デスクワーク日か外出日かは「今日の活動」の値に従ってください。\n"
+        "- 今日のライド仕事量kJは「同日のライド」の合計仕事量を使ってください（ライドが複数ファイルに分かれている場合があるため）。複数本ある場合は、詳細解析していないライドがあることを評価でも一言触れてください。\n"
         "- 目標kcal = 生活分（デスクワーク日1,750 / 外出日1,950）+ 今日のライド仕事量kJ - 300〜400kcal（レスト日は-0〜200）。\n"
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
