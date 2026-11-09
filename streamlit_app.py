@@ -23,7 +23,7 @@ from services.nutrition import compute_day_plan
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v30"
+APP_VERSION = "2026-11-09-claude-nutrition-v32"
 
 FUELING_SETS = {
     "高強度": (
@@ -115,15 +115,13 @@ def main() -> None:
             format_func=lambda option: SHORT_LABELS.get(option, option),
             label_visibility="collapsed",
         )
-        extra_cols = st.columns([2, 3], gap="small")
-        carb_adjust_g = extra_cols[0].number_input("糖質調整（g）", min_value=-200, max_value=200, value=0, step=5, format="%d")
+        carb_adjust_g = st.number_input("糖質調整（g）", min_value=-200, max_value=200, value=0, step=5, format="%d")
         tomorrow_plan = st.segmented_control(
             "明日のトレーニング",
             TOMORROW_OPTIONS,
             format_func=lambda option: SHORT_LABELS.get(option, option),
         )
         day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
-        meal_note = st.text_input("食事メモ（任意）", value="", placeholder="例: 昼は外食 / 朝食はもう食べた")
 
         uploaded_file = None
         uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
@@ -152,7 +150,6 @@ def main() -> None:
                     "tomorrow_plan": tomorrow_plan,
                     "day_type": DAY_TYPES.get(day_type or "デスクワーク"),
                     "day_type_key": day_type or "デスクワーク",
-                    "meal_note": meal_note.strip() or None,
                 },
                 intervals_snapshot=intervals_snapshot,
                 include_prompt=True,
@@ -1137,38 +1134,64 @@ def inject_styles() -> None:
         [data-testid="stForm"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
             min-width: 0 !important;
         }
+        [data-testid="stButtonGroup"], [data-testid="stButtonGroup"] > div {
+            width: 100% !important;
+            max-width: none !important;
+        }
+        [data-testid="stButtonGroup"] button [data-testid="stMarkdownContainer"] {
+            flex: none !important;
+        }
+        [data-testid="stButtonGroup"] button p {
+            white-space: nowrap !important;
+        }
+        [data-testid="stButtonGroup"] > div {
+            display: grid !important;
+            grid-auto-flow: column !important;
+            grid-auto-columns: 1fr !important;
+        }
+        [data-testid="stButtonGroup"] > div::before,
+        [data-testid="stButtonGroup"] > div::after {
+            display: none !important;
+            content: none !important;
+        }
+        [data-testid="stButtonGroup"] button {
+            width: 100% !important;
+            min-width: 0 !important;
+            white-space: nowrap !important;
+        }
         [data-testid="stNumberInputContainer"] {
             display: flex !important;
+            width: 100% !important;
         }
         [data-testid="stNumberInputContainer"] > div:has(> [data-testid="stNumberInputStepDown"]) {
             display: contents !important;
         }
-        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepDown"],
-        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepUp"] {
-            width: 3rem !important;
-            min-width: 3rem !important;
-            height: auto !important;
-            align-self: stretch !important;
-            background-color: #3A3F48 !important;
-            color: #FFFFFF !important;
-            font-size: 1.2rem !important;
-        }
-        [data-testid="stNumberInputStepDown"] {
-            order: 0 !important;
-            border-right: 1px solid #5A616D !important;
-            border-radius: 0.5rem 0 0 0.5rem !important;
-        }
         [data-testid="stNumberInputContainer"] > [data-baseweb="input"] {
-            order: 1 !important;
-            flex: 1 1 auto !important;
+            order: 0 !important;
+            flex: 2 1 0 !important;
             min-width: 0 !important;
         }
         [data-testid="stNumberInputContainer"] input {
             text-align: center !important;
         }
-        [data-testid="stNumberInputStepUp"] {
-            order: 2 !important;
+        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepDown"],
+        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepUp"] {
+            flex: 1 1 0 !important;
+            width: auto !important;
+            min-width: 0 !important;
+            height: auto !important;
+            align-self: stretch !important;
+            background-color: #3A3F48 !important;
+            color: #FFFFFF !important;
+            font-size: 1.2rem !important;
             border-left: 1px solid #5A616D !important;
+        }
+        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepDown"] {
+            order: 1 !important;
+            border-radius: 0 !important;
+        }
+        [data-testid="stNumberInputContainer"] button[data-testid="stNumberInputStepUp"] {
+            order: 2 !important;
             border-radius: 0 0.5rem 0.5rem 0 !important;
         }
         [data-testid="InputInstructions"] {
@@ -1590,7 +1613,6 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         ),
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
         f"- 今日の活動: {display(manual.get('day_type'))}",
-        f"- 食事メモ: {display(manual.get('meal_note'))}",
         "",
         "## 今日の栄養（ツール計算済み・数値も形式もこのまま転記）",
         *markdown_nutrition_plan(context.get("nutrition_plan"), manual),
@@ -2210,7 +2232,6 @@ def build_chatgpt_prompt() -> str:
         "- 「今日の栄養」はツールが計算済みです。「今日の栄養（ツール計算済み）」の2つの表と※の行を、数値・列・行を一切変えずに転記してください。再計算しないでください。\n"
         "- 表の後に「食べ方の例（量は目安）」を、朝・昼・夕1行ずつ、各食の数値に合う内容で書いてください。間食は作らないでください。\n"
         "- 最後に、明日のトレーニングに向けた炭水化物の考え方を1〜2行で書いてください。\n"
-        "- 「食事メモ」に記載がある日だけ、表の下に調整案を別記してかまいません。その場合も元の表は変えないでください。\n"
         "- カロミルのスクリーンショットが添付された日で、画像の値と表の補給値が違えば、その違いを指摘するだけにしてください。\n"
         "- 補給が「カロミル写真」の日だけは例外です。トレーニング補給の行を画像のkcal・P・F・Cで埋め、残り＝今日の目標−補給（整数に丸め、0未満は0）を、次のルールで朝昼夕に分けてください：Pは朝・昼が残り÷3を5g単位、夕は残り／Fは朝が残り×25%を5g単位、昼が(残り−朝)÷2を5g単位、夕は残り／Cは※計算の行のC配分で朝・昼を5g単位、夕は残り／各食kcal＝P×4+F×9+C×4を10kcal単位、夕kcalは残りkcal−朝−昼。画像がない場合は推定せず、画像を求めてください。\n\n"
         "出力順:\n"
