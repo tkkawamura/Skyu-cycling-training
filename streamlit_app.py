@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v8"
+APP_VERSION = "2026-11-09-claude-nutrition-v9"
 
 FUELING_SETS = {
     "高強度": (
@@ -45,7 +45,7 @@ DAY_TYPES = {
 GOAL_LABEL = "富士ヒル75分"
 TARGET_FTP_W = 280
 TARGET_BODY_MASS_KG = 60.0
-CLAUDE_OPEN_URL = "https://claude.ai/"
+CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
 TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
 DETAILED_HISTORY_DAYS = 14
 LONG_HISTORY_DAYS = 42
