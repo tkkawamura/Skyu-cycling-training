@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v26"
+APP_VERSION = "2026-11-09-claude-nutrition-v27"
 
 FUELING_SETS = {
     "高強度": (
@@ -1474,11 +1474,10 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         "",
         "## 補給と翌日予定",
         f"- トレーニング前・中の補給: {display(manual.get('fueling_set'))}",
-        f"  - 合計（カロミル登録値）: {display(manual.get('fueling_set_totals'))}",
+        f"  - **補給の確定値（栄養計算にはこの値を使う）: {display(manual.get('fueling_set_totals_adjusted') or manual.get('fueling_set_totals'))}**",
+        f"  - 内訳: カロミル登録値 {display(manual.get('fueling_set_totals'))} に、糖質調整 {manual.get('carb_adjust_g') or 0:+d}g（1g=4kcalで換算）を反映済み",
+        f"  - 追加・変更（確定値に未反映。ある場合だけ加減する）: {display(manual.get('fueling_extra'))}",
         f"  - 内容: {display(manual.get('fueling_set_detail'))}",
-        f"  - 追加・変更: {display(manual.get('fueling_extra'))}",
-        f"  - 糖質調整: {manual.get('carb_adjust_g') or 0:+d}g（1g=4kcalで換算）",
-        f"  - 糖質調整後の合計: {display(manual.get('fueling_set_totals_adjusted') or manual.get('fueling_set_totals'))}",
         (
             "  - カロミル写真を添付：補給のkcal・PFCは添付画像を参照（このテキストには数値なし）"
             if manual.get("fueling_set") == FUELING_PHOTO
@@ -2105,7 +2104,7 @@ def build_chatgpt_prompt() -> str:
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
         "- 翌朝が超早朝練習のため、夕食までの炭水化物は明日のトレーニング内容に合わせて決めてください。低強度・レスト前でも炭水化物を減らしすぎないでください。\n"
-        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。補給が「カロミル写真」なのに画像が添付されていない場合は、補給量を推定せず、画像を添付するよう依頼してください。画像がない場合は、「補給と翌日予定」の「糖質調整後の合計」をベースに使ってください（推定し直さない）。「追加・変更」に書かれた内容（バナナなし、ジェル追加など）があれば、その分だけ加減して補給分を確定させてください。パターン未選択で糖質調整だけある場合は、調整量をそのまま補給分として扱ってください。\n"
+        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。補給が「カロミル写真」なのに画像が添付されていない場合は、補給量を推定せず、画像を添付するよう依頼してください。画像がない場合は、「補給と翌日予定」の「補給の確定値」をそのまま使ってください（カロミル登録値や推定値に戻さない）。「追加・変更」に書かれた内容（バナナなし、ジェル追加など）があれば、その分だけ加減して補給分を確定させてください。パターン未選択で糖質調整だけある場合は、調整量をそのまま補給分として扱ってください。\n"
         "- 今日の目標から、トレーニング前・中の補給分を差し引いた残り（朝食後〜夕食）を、朝・昼・夕の3食に分けてください。間食の行は作らないでください。\n\n"
         "出力順:\n"
         "1. 結論\n"
