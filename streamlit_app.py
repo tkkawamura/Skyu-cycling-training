@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v13"
+APP_VERSION = "2026-11-09-claude-nutrition-v14"
 
 FUELING_SETS = {
     "高強度": (
@@ -68,8 +68,7 @@ def main() -> None:
     w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
     subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
-    fueling_set = st.selectbox("トレーニング前・中の補給", list(FUELING_SETS), index=None, placeholder="補給パターンを選択")
-    fueling_extra = st.text_input("補給の追加・変更（任意）", value="", placeholder="例: バナナ抜き / ジェル1個追加")
+    fueling_set = st.selectbox("トレーニング前・中の補給（カロミル画像がない日用）", list(FUELING_SETS), index=None, placeholder="補給パターンを選択")
     tomorrow_plan = st.selectbox("明日のトレーニング", TOMORROW_OPTIONS, index=None, placeholder="明日のメニューを選択")
     day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
 
@@ -91,7 +90,6 @@ def main() -> None:
                     "subjective_note": subjective_note.strip() or None,
                     "fueling_set": fueling_set,
                     "fueling_set_detail": FUELING_SETS.get(fueling_set) if fueling_set else None,
-                    "fueling_extra": fueling_extra.strip() or None,
                     "tomorrow_plan": tomorrow_plan,
                     "day_type": DAY_TYPES.get(day_type or "デスクワーク"),
                 },
@@ -1268,6 +1266,7 @@ def render_copy_box(text: str) -> None:
           <a href="{CLAUDE_OPEN_URL}" target="_blank" rel="noopener" style="display:block;box-sizing:border-box;width:100%;margin-top:8px;padding:12px 16px;border:1px solid #FC6719;border-radius:6px;color:#FC6719;text-align:center;font-weight:700;font-size:16px;text-decoration:none;">
             Claudeを開く
           </a>
+          <div style="margin:8px 0 0;color:#A7ADB8;font-size:13px;">カロミルのスクリーンショットがあれば、Claudeに貼るときに一緒に添付してください。</div>
           <div id="copyStatus" style="margin:8px 0;color:#5BD08A;font-size:14px;"></div>
           <textarea id="copyText" readonly style="width:100%;height:280px;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:12px;font-size:13px;line-height:1.45;">{escaped_text}</textarea>
         </div>
@@ -1326,7 +1325,7 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         "## 補給と翌日予定",
         f"- トレーニング前・中の補給: {display(manual.get('fueling_set'))}",
         f"  - 内容: {display(manual.get('fueling_set_detail'))}",
-        f"  - 追加・変更: {display(manual.get('fueling_extra'))}",
+        "  - カロミルのスクリーンショットが添付されている場合は、そちらを優先（上記パターンは画像がない日の簡易版）",
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
         f"- 今日の活動: {display(manual.get('day_type'))}",
         "",
@@ -1948,7 +1947,7 @@ def build_chatgpt_prompt() -> str:
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
         "- 翌朝が超早朝練習のため、夕食までの炭水化物は明日のトレーニング内容に合わせて決めてください。低強度・レスト前でも炭水化物を減らしすぎないでください。\n"
-        "- 補給は「補給と翌日予定」の内容（選択したパターンの詳細と追加・変更）を使ってkcal・PFCを見積もってください。成分量が不明な食品は推定値であることを明記してください。\n"
+        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。画像がない場合だけ、「補給と翌日予定」で選んだパターンの内容から見積もり、推定値であることを明記してください。\n"
         "- 今日の目標から、トレーニング前・中の補給分を差し引いた残り（朝食後〜夕食）のkcal・P・F・Cを出し、食べ方の例を簡潔に添えてください。\n\n"
         "出力順:\n"
         "1. 結論\n"
