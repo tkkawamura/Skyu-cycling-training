@@ -21,7 +21,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v2"
+APP_VERSION = "2026-11-09-claude-nutrition-v3"
 
 FUELING_SETS = {
     "高強度": (
@@ -58,7 +58,6 @@ def main() -> None:
     max_hr = int(to_float(metrics.get("max_heart_rate")) or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
     w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
-    st.subheader("主観入力")
     subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など")
     fueling_set = st.selectbox("トレーニング前・中の補給", list(FUELING_SETS), index=None, placeholder="補給パターンを選択")
     fueling_extra = st.text_input("補給の追加・変更（任意）", value="", placeholder="例: バナナ抜き / ジェル1個追加")
