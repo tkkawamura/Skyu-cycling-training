@@ -23,7 +23,7 @@ from services.nutrition import compute_day_plan
 
 load_dotenv()
 
-APP_VERSION = "2026-11-10-claude-nutrition-v35"
+APP_VERSION = "2026-11-10-claude-nutrition-v36"
 
 FUELING_SETS = {
     "高強度": (
@@ -405,8 +405,13 @@ def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any])
     ]
     for warning in plan.get("warnings") or []:
         lines += [warning, ""]
+    if supply is None:
+        x_line = "X用の目標表記：食事目標◯kcal P◯/F◯/C◯（朝昼夕の合計を、画像から計算した値で埋める）"
+    else:
+        r = plan["remaining"]
+        x_line = f"X用の目標表記：食事目標{fmt_num(r['kcal'])}kcal P{r['p']}/F{r['f']}/C{r['c']}"
     lines += [
-        f"X用の目標表記：今日の目標{fmt_num(t['kcal'])}kcal P{t['p']}/F{t['f']}/C{t['c']}",
+        x_line,
         "",
         "### 朝昼夕（カロミル入力用）",
         "|区分|P(g)|F(g)|C(g)|kcal|",
