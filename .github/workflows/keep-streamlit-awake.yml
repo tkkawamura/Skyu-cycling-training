@@ -1,0 +1,24 @@
+name: Keep Streamlit app awake
+
+on:
+  schedule:
+    # 04:30 and 05:30 JST (UTC+9), during the early-morning ride
+    - cron: "30 19 * * *"
+    - cron: "30 20 * * *"
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Wake the app
+        run: python scripts/wake_streamlit.py
