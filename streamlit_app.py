@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v21"
+APP_VERSION = "2026-11-09-claude-nutrition-v22"
 
 FUELING_SETS = {
     "高強度": (
@@ -53,11 +53,13 @@ FUELING_TOTALS = {
 }
 
 
-def fueling_totals_text(name: str | None) -> str | None:
+def fueling_totals_text(name: str | None, carb_adjust_g: float = 0) -> str | None:
     totals = FUELING_TOTALS.get(name or "")
     if not totals:
         return None
-    return f"{totals['kcal']}kcal / P{totals['p']}g / F{totals['f']}g / C{totals['c']}g"
+    kcal = totals["kcal"] + carb_adjust_g * 4
+    carbs = totals["c"] + carb_adjust_g
+    return f"{kcal:.0f}kcal / P{totals['p']}g / F{totals['f']}g / C{carbs:.1f}g"
 
 
 FUELING_MEMO_MD = """
@@ -103,7 +105,7 @@ def main() -> None:
 
     with st.form("coach_inputs", border=False):
         subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
-        with st.popover("トレーニング前・中の補給（それぞれのメニュー内訳はこちら）"):
+        with st.popover("トレーニング前・中の補給（メニュー内訳はこちら）"):
             st.markdown(FUELING_MEMO_MD)
         fueling_set = st.segmented_control(
             "トレーニング前・中の補給",
@@ -111,6 +113,9 @@ def main() -> None:
             format_func=lambda option: SHORT_LABELS.get(option, option),
             label_visibility="collapsed",
         )
+        extra_cols = st.columns([3, 2], gap="small")
+        fueling_extra = extra_cols[0].text_input("補給の追加・変更（任意）", value="", placeholder="例: バナナなし / ジェル追加")
+        carb_adjust_g = extra_cols[1].number_input("糖質調整（g）", min_value=-200, max_value=200, value=0, step=5, format="%d")
         tomorrow_plan = st.segmented_control(
             "明日のトレーニング",
             TOMORROW_OPTIONS,
@@ -138,6 +143,9 @@ def main() -> None:
                     "fueling_set": fueling_set,
                     "fueling_set_detail": FUELING_SETS.get(fueling_set) if fueling_set else None,
                     "fueling_set_totals": fueling_totals_text(fueling_set),
+                    "fueling_extra": fueling_extra.strip() or None,
+                    "carb_adjust_g": int(carb_adjust_g) if carb_adjust_g else 0,
+                    "fueling_set_totals_adjusted": fueling_totals_text(fueling_set, carb_adjust_g) if carb_adjust_g else None,
                     "tomorrow_plan": tomorrow_plan,
                     "day_type": DAY_TYPES.get(day_type or "デスクワーク"),
                 },
@@ -1008,6 +1016,20 @@ def inject_styles() -> None:
             color: var(--coach-text) !important;
             font-size: 0.9rem !important;
         }
+        [data-testid="stForm"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            gap: 0.5rem !important;
+        }
+        [data-testid="stForm"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            min-width: 0 !important;
+        }
+        [data-testid="InputInstructions"] {
+            display: none !important;
+        }
+        [data-testid="stNumberInputContainer"], [data-testid="stNumberInputContainer"] button {
+            background-color: var(--coach-panel) !important;
+            color: var(--coach-text) !important;
+        }
         [data-testid="stVerticalBlock"] {
             gap: 0.6rem !important;
         }
@@ -1412,6 +1434,9 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"- トレーニング前・中の補給: {display(manual.get('fueling_set'))}",
         f"  - 合計（カロミル登録値）: {display(manual.get('fueling_set_totals'))}",
         f"  - 内容: {display(manual.get('fueling_set_detail'))}",
+        f"  - 追加・変更: {display(manual.get('fueling_extra'))}",
+        f"  - 糖質調整: {manual.get('carb_adjust_g') or 0:+d}g（1g=4kcalで換算）",
+        f"  - 糖質調整後の合計: {display(manual.get('fueling_set_totals_adjusted') or manual.get('fueling_set_totals'))}",
         "  - カロミルのスクリーンショットが添付されている場合は、そちらを優先（上記パターンは画像がない日の簡易版）",
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
         f"- 今日の活動: {display(manual.get('day_type'))}",
@@ -2034,7 +2059,7 @@ def build_chatgpt_prompt() -> str:
         "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
         "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
         "- 翌朝が超早朝練習のため、夕食までの炭水化物は明日のトレーニング内容に合わせて決めてください。低強度・レスト前でも炭水化物を減らしすぎないでください。\n"
-        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。画像がない場合は、「補給と翌日予定」で選んだパターンの「合計（カロミル登録値）」のkcal・P・F・Cをそのまま補給分として使ってください（推定し直さない）。\n"
+        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。画像がない場合は、「補給と翌日予定」の「糖質調整後の合計」をベースに使ってください（推定し直さない）。「追加・変更」に書かれた内容（バナナなし、ジェル追加など）があれば、その分だけ加減して補給分を確定させてください。パターン未選択で糖質調整だけある場合は、調整量をそのまま補給分として扱ってください。\n"
         "- 今日の目標から、トレーニング前・中の補給分を差し引いた残り（朝食後〜夕食）のkcal・P・F・Cを出し、食べ方の例を簡潔に添えてください。\n\n"
         "出力順:\n"
         "1. 結論\n"
