@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v18"
+APP_VERSION = "2026-11-09-claude-nutrition-v19"
 
 FUELING_SETS = {
     "高強度": (
@@ -73,23 +73,25 @@ def main() -> None:
     max_hr = int(to_float(metrics.get("max_heart_rate")) or int_setting("ATHLETE_MAX_HEART_RATE_BPM", 178))
     w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
-    subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
-    fueling_set = st.segmented_control(
-        "トレーニング前・中の補給（カロミル画像がない日用）",
-        list(FUELING_SETS),
-        format_func=lambda option: SHORT_LABELS.get(option, option),
-    )
-    tomorrow_plan = st.segmented_control(
-        "明日のトレーニング",
-        TOMORROW_OPTIONS,
-        format_func=lambda option: SHORT_LABELS.get(option, option),
-    )
-    day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
+    with st.form("coach_inputs", border=False):
+        subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
+        fueling_set = st.segmented_control(
+            "トレーニング前・中の補給（カロミル画像がない日用）",
+            list(FUELING_SETS),
+            format_func=lambda option: SHORT_LABELS.get(option, option),
+        )
+        tomorrow_plan = st.segmented_control(
+            "明日のトレーニング",
+            TOMORROW_OPTIONS,
+            format_func=lambda option: SHORT_LABELS.get(option, option),
+        )
+        day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
 
-    uploaded_file = None
-    uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
+        uploaded_file = None
+        uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
+        submitted = st.form_submit_button("Claude貼り付け用テキストを生成", type="primary", use_container_width=True)
 
-    if st.button("Claude貼り付け用テキストを生成", type="primary", use_container_width=True):
+    if submitted:
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
             context = generate_context(
                 lookback_days=int(lookback_days),
@@ -903,7 +905,8 @@ def inject_styles() -> None:
             border-color: var(--coach-orange) !important;
             font-weight: 700 !important;
         }
-        [data-testid="stBaseButton-primary"], button[kind="primary"] {
+        [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"],
+        button[kind="primary"], button[kind="primaryFormSubmit"] {
             background-color: var(--coach-orange) !important;
             border-color: var(--coach-orange) !important;
             color: #FFFFFF !important;
