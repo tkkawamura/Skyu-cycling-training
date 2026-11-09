@@ -18,11 +18,12 @@ from dotenv import load_dotenv
 
 from services.fit_context import AthleteInputs, FitActivityContextBuilder
 from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
+from services.nutrition import compute_day_plan
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v28"
+APP_VERSION = "2026-11-09-claude-nutrition-v29"
 
 FUELING_SETS = {
     "高強度": (
@@ -105,7 +106,7 @@ def main() -> None:
     w_prime = float(to_float(metrics.get("w_prime_capacity")) or float_setting("ATHLETE_W_PRIME_KJ", 0.0))
 
     with st.form("coach_inputs", border=False):
-        subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=80)
+        subjective_note = st.text_area("自己分析（Xに投稿した文章をそのまま）", value="", placeholder="脚の感覚、きつかった区間、睡眠、疲労感など", height=68)
         with st.popover("トレーニング前・中の補給（メニュー内訳はこちら）"):
             st.markdown(FUELING_MEMO_MD)
         fueling_set = st.segmented_control(
@@ -123,6 +124,7 @@ def main() -> None:
             format_func=lambda option: SHORT_LABELS.get(option, option),
         )
         day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
+        meal_note = st.text_input("食事メモ（任意）", value="", placeholder="例: 昼は外食 / 朝食はもう食べた")
 
         uploaded_file = None
         uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
@@ -151,6 +153,8 @@ def main() -> None:
                     "fueling_set_totals_adjusted": fueling_totals_text(fueling_set, carb_adjust_g) if carb_adjust_g else None,
                     "tomorrow_plan": tomorrow_plan,
                     "day_type": DAY_TYPES.get(day_type or "デスクワーク"),
+                    "day_type_key": day_type or "デスクワーク",
+                    "meal_note": meal_note.strip() or None,
                 },
                 intervals_snapshot=intervals_snapshot,
                 include_prompt=True,
@@ -286,6 +290,7 @@ def generate_context(
         "fit_analysis_source": fit_source,
     }
     compact_fit_context = build_compact_fit_context(fit_context)
+    same_day_rides = build_same_day_rides(intervals_payload, compact_fit_context)
     output = {
         "schema_version": "cycling_training_review_context.v2",
         "meta": {
@@ -310,7 +315,8 @@ def generate_context(
         },
         "manual_inputs": manual_inputs,
         "intervals_icu": intervals_context,
-        "same_day_rides": build_same_day_rides(intervals_payload, compact_fit_context),
+        "same_day_rides": same_day_rides,
+        "nutrition_plan": build_nutrition_plan(manual_inputs, same_day_rides),
         "llm_review_summary": build_review_summary(intervals_context, compact_fit_context, manual_inputs),
         "fit_activity_context": compact_fit_context,
         "uploaded_json_context": uploaded_json_context if uploaded_json_context and fit_context is None else None,
@@ -320,6 +326,110 @@ def generate_context(
         },
     }
     return output
+
+
+def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
+    option = manual.get("fueling_set")
+    if option == FUELING_PHOTO:
+        return None
+    adjust = float(manual.get("carb_adjust_g") or 0)
+    base = FUELING_TOTALS.get(option or "", {"kcal": 0, "p": 0, "f": 0, "c": 0})
+    return {"kcal": base["kcal"] + adjust * 4, "p": base["p"], "f": base["f"], "c": base["c"] + adjust}
+
+
+def build_nutrition_plan(manual: dict[str, Any], same_day: dict[str, Any] | None) -> dict[str, Any]:
+    today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).date().isoformat()
+    ride_kj = 0.0
+    if same_day and same_day.get("date") == today_jst:
+        ride_kj = to_float(same_day.get("total_work_kj")) or 0.0
+    plan = compute_day_plan(
+        day_type=manual.get("day_type_key") or "デスクワーク",
+        ride_kj=ride_kj,
+        fueling_option=None if manual.get("fueling_set") == FUELING_PHOTO else manual.get("fueling_set"),
+        supply=confirmed_supply(manual),
+        tomorrow_option=manual.get("tomorrow_plan"),
+    )
+    plan["today_jst"] = today_jst
+    return plan
+
+
+def fmt_num(value: Any) -> str:
+    number = to_float(value)
+    if number is None:
+        return "-"
+    return f"{round(number):,}"
+
+
+def fueling_basis_line(manual: dict[str, Any]) -> str:
+    option = manual.get("fueling_set")
+    if option == FUELING_PHOTO:
+        text = "カロミル写真の値"
+    else:
+        base = FUELING_TOTALS.get(option or "")
+        adjust = int(manual.get("carb_adjust_g") or 0)
+        label = SHORT_LABELS.get(option or "", option or "-")
+        if base and adjust:
+            text = f"「{label}」パターン（カロミル登録値 {base['kcal']}kcal・C{base['c']}g）から、アプリで糖質{adjust:+d}g調整済み"
+        elif base:
+            text = f"「{label}」パターン（カロミル登録値 {base['kcal']}kcal・C{base['c']}g）のまま（調整なし）"
+        else:
+            text = f"パターンなし、アプリで糖質{adjust:+d}g"
+    if manual.get("fueling_extra"):
+        text += f"／追加・変更メモ：{manual.get('fueling_extra')}（表には未反映）"
+    return f"※トレーニング補給：{text}"
+
+
+def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any]) -> list[str]:
+    if not plan:
+        return []
+    t = plan["targets"]
+    supply = plan.get("supply")
+    share = plan.get("carb_share") or (0, 0, 0)
+    share_text = "/".join(f"{round(x * 100)}%" for x in share)
+    lines = [
+        "### 今日の目標とトレーニング補給",
+        "|区分|P(g)|F(g)|C(g)|kcal|",
+        "|---|---:|---:|---:|---:|",
+        f"|今日の目標|{t['p']}|{t['f']}|{t['c']}|{fmt_num(t['kcal'])}|",
+    ]
+    if supply is None:
+        lines.append("|トレーニング補給（摂取済み）|（添付画像の値）|（添付画像の値）|（添付画像の値）|（添付画像の値）|")
+    else:
+        lines.append(f"|トレーニング補給（摂取済み）|{fmt_num(supply['p'])}|{fmt_num(supply['f'])}|{fmt_num(supply['c'])}|{fmt_num(supply['kcal'])}|")
+    lines += [
+        "",
+        fueling_basis_line(manual),
+        "※計算：生活分{life} + ライド{kj}kJ − {deficit} ／ 今日の区分={cat} ／ 明日={tom} → C配分 朝/昼/夕 {share}{floor}".format(
+            life=fmt_num(t["life_kcal"]),
+            kj=fmt_num(t["ride_kj"]),
+            deficit=t["deficit"],
+            cat=plan["today_category"],
+            tom=manual.get("tomorrow_plan") or "未選択（中強度の配分）",
+            share=share_text,
+            floor="（Cは下限値を適用）" if t.get("c_floor_applied") else "",
+        ),
+        "",
+    ]
+    for warning in plan.get("warnings") or []:
+        lines += [warning, ""]
+    lines += [
+        "### 朝昼夕（カロミル入力用）",
+        "|区分|P(g)|F(g)|C(g)|kcal|",
+        "|---|---:|---:|---:|---:|",
+    ]
+    if supply is None:
+        lines += [
+            "|朝（ライド後）|画像から計算|-|-|-|",
+            "|昼|画像から計算|-|-|-|",
+            "|夕|画像から計算|-|-|-|",
+            "|**合計**|-|-|-|-|",
+        ]
+    else:
+        for name, meal in plan["meals"].items():
+            lines.append(f"|{name}|{meal['p']}|{meal['f']}|{meal['c']}|{fmt_num(meal['kcal'])}|")
+        r = plan["remaining"]
+        lines.append(f"|**合計**|**{r['p']}**|**{r['f']}**|**{r['c']}**|**{fmt_num(r['kcal'])}**|")
+    return lines
 
 
 def is_ride(activity: dict[str, Any]) -> bool:
@@ -1073,7 +1183,7 @@ def inject_styles() -> None:
             color: var(--coach-text) !important;
         }
         [data-testid="stVerticalBlock"] {
-            gap: 0.6rem !important;
+            gap: 0.5rem !important;
         }
         [data-testid="stFileUploaderDropzone"] {
             padding: 0 !important;
@@ -1485,6 +1595,10 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         ),
         f"- 明日のトレーニング: {display(manual.get('tomorrow_plan'))}",
         f"- 今日の活動: {display(manual.get('day_type'))}",
+        f"- 食事メモ: {display(manual.get('meal_note'))}",
+        "",
+        "## 今日の栄養（ツール計算済み・数値も形式もこのまま転記）",
+        *markdown_nutrition_plan(context.get("nutrition_plan"), manual),
         "",
         "## 目標進捗",
         *markdown_goal_progress(metrics, athlete_inputs),
@@ -2098,14 +2212,13 @@ def build_chatgpt_prompt() -> str:
         "- 医療・診断ではなく、トレーニング上の示唆に限定してください。\n"
         "- 表と短い箇条書きを使い、要点を短く伝えてください。\n\n"
         "栄養ルール:\n"
-        "- デスクワーク日か外出日かは「今日の活動」の値に従ってください。\n"
-        "- 今日のライド仕事量kJは「同日のライド」の合計仕事量を使ってください（ライドが複数ファイルに分かれている場合があるため）。複数本ある場合は、詳細解析していないライドがあることを評価でも一言触れてください。\n"
-        "- 目標kcal = 生活分（デスクワーク日1,750 / 外出日1,950）+ 今日のライド仕事量kJ - 300〜400kcal（レスト日は-0〜200）。\n"
-        "- 回復しながら減量とトレーニングを継続できる水準にし、少なく見積もりすぎないでください。\n"
-        "- たんぱく質は約130g、脂質はレスト日・低強度日でも40gを下限とします。\n"
-        "- 翌朝が超早朝練習のため、夕食までの炭水化物は明日のトレーニング内容に合わせて決めてください。低強度・レスト前でも炭水化物を減らしすぎないでください。\n"
-        "- トレーニング前・中の補給は、カロミルのスクリーンショットが一緒に添付されていれば、その画像のkcal・P・F・Cを最優先で使ってください。補給が「カロミル写真」なのに画像が添付されていない場合は、補給量を推定せず、画像を添付するよう依頼してください。画像がない場合は、「補給と翌日予定」の「補給の確定値」をそのまま使ってください（カロミル登録値や推定値に戻さない）。「追加・変更」に書かれた内容（バナナなし、ジェル追加など）があれば、その分だけ加減して補給分を確定させてください。パターン未選択で糖質調整だけある場合は、調整量をそのまま補給分として扱ってください。\n"
-        "- 今日の目標から、トレーニング前・中の補給分を差し引いた残り（朝食後〜夕食）を、朝・昼・夕の3食に分けてください。間食の行は作らないでください。\n\n"
+        "- 「今日の栄養」はツールが計算済みです。「今日の栄養（ツール計算済み）」の2つの表と※の行を、数値・列・行を一切変えずに転記してください。再計算しないでください。\n"
+        "- 表の後に「食べ方の例（量は目安）」を、朝・昼・夕1行ずつ、各食の数値に合う内容で書いてください。間食は作らないでください。\n"
+        "- 最後に、明日のトレーニングに向けた炭水化物の考え方を1〜2行で書いてください。\n"
+        "- 「食事メモ」に記載がある日だけ、表の下に調整案を別記してかまいません。その場合も元の表は変えないでください。\n"
+        "- 「追加・変更メモ」は表に反映されていません。内容があれば、その影響を1行で補足してください（表は変えない）。\n"
+        "- カロミルのスクリーンショットが添付された日で、画像の値と表の補給値が違えば、その違いを指摘するだけにしてください。\n"
+        "- 補給が「カロミル写真」の日だけは例外です。トレーニング補給の行を画像のkcal・P・F・Cで埋め、残り＝今日の目標−補給（整数に丸め、0未満は0）を、次のルールで朝昼夕に分けてください：Pは朝・昼が残り÷3を5g単位、夕は残り／Fは朝が残り×25%を5g単位、昼が(残り−朝)÷2を5g単位、夕は残り／Cは※計算の行のC配分で朝・昼を5g単位、夕は残り／各食kcal＝P×4+F×9+C×4を10kcal単位、夕kcalは残りkcal−朝−昼。画像がない場合は推定せず、画像を求めてください。\n\n"
         "出力順:\n"
         "1. 結論\n"
         "2. セッション構造\n"
@@ -2116,26 +2229,8 @@ def build_chatgpt_prompt() -> str:
         "7. 次回提案\n"
         "8. 判断できないこと\n"
         "9. 追加で必要な情報\n"
-        "10. 今日の栄養（必ず下の【栄養の出力テンプレート】の2つの表と同じ形式で出す。表の列・行・順番を変えない。独自の表は作らない）\n"
+        "10. 今日の栄養（「今日の栄養（ツール計算済み）」の表をそのまま転記し、食べ方の例と明日に向けた炭水化物の考え方を添える）\n"
         "11. 目標進捗（目標進捗の表をもとに、目標までの距離と今日のセッションの位置づけを2〜3行で）\n\n"
-        "【栄養の出力テンプレート】（◯に実際の値を入れる。列は必ず 区分 / P(g) / F(g) / C(g) / kcal の順）\n\n"
-        "### 今日の目標とトレーニング補給\n"
-        "|区分|P(g)|F(g)|C(g)|kcal|\n"
-        "|---|---:|---:|---:|---:|\n"
-        "|今日の目標|◯|◯|◯|◯|\n"
-        "|トレーニング補給（摂取済み）|◯|◯|◯|◯|\n\n"
-        "※トレーニング補給：「◯◯」パターン（カロミル登録値 ◯kcal・C◯g）から、アプリで糖質◯g調整済み\n\n"
-        "### 朝昼夕（カロミル入力用）\n"
-        "|区分|P(g)|F(g)|C(g)|kcal|\n"
-        "|---|---:|---:|---:|---:|\n"
-        "|朝（ライド後）|◯|◯|◯|◯|\n"
-        "|昼|◯|◯|◯|◯|\n"
-        "|夕|◯|◯|◯|◯|\n"
-        "|**合計**|**◯**|**◯**|**◯**|**◯**|\n\n"
-        "- 1つ目の表の直下に、トレーニング補給の根拠を1行で書く（上の「※トレーニング補給」の形）。選んだパターン名、カロミル登録値、アプリでの糖質調整（+/-g）、追加・変更があればその内容を入れる。調整がなければ「パターンのまま（調整なし）」、カロミル写真の日は「カロミル写真の値」と書く。\n"
-        "- 朝昼夕の合計は「今日の目標 − トレーニング補給」と一致させる。\n"
-        "- 表の後に「食べ方の例（量は目安）」として、朝・昼・夕を1行ずつ箇条書きで添える。\n"
-        "- 最後に、明日のトレーニングに向けた炭水化物の考え方を1〜2行で添える。\n\n"
         "主要区間表には、区間ID、時間、mean/weighted power、HR、cadence/speed、EF/デカップリング、W′、pedaling dynamics有無を、利用可能な範囲で入れてください。"
     )
 
