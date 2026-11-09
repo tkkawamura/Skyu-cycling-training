@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v14"
+APP_VERSION = "2026-11-09-claude-nutrition-v15"
 
 FUELING_SETS = {
     "高強度": (
@@ -719,6 +719,9 @@ def build_review_summary(
 def render_context(context: dict[str, Any]) -> None:
     metrics = context["intervals_icu"].get("metrics") or {}
     latest = context["intervals_icu"].get("latest_ride") or {}
+    paste_text = build_paste_text(context)
+
+    render_copy_box(paste_text)
 
     render_metrics(metrics)
 
@@ -736,10 +739,9 @@ def render_context(context: dict[str, Any]) -> None:
         st.warning("詳細なFIT解析情報は含まれていません。自動取得に失敗した場合は、FITファイルをアップロードしてください。")
 
     json_text = json.dumps(context, ensure_ascii=False, indent=2)
-    paste_text = build_paste_text(context)
-    st.subheader("Claudeへ送るテキスト")
+    st.subheader("Claudeへ送るテキスト（確認用）")
     st.caption(f"貼り付け文字数: 約{len(paste_text):,}文字")
-    render_copy_box(paste_text)
+    st.text_area("Claudeへ送るテキスト", value=paste_text, height=280, label_visibility="collapsed")
     st.download_button(
         "JSONをダウンロード",
         data=json_text,
@@ -1259,35 +1261,42 @@ def render_copy_box(text: str) -> None:
     escaped_text = escape(text)
     components.html(
         f"""
+        <style>html, body {{ margin: 0; padding: 0; background: transparent; }}</style>
         <div style="font-family: sans-serif;">
-          <button id="copyButton" style="width:100%;padding:12px 16px;border:0;border-radius:6px;background:#FC6719;color:white;font-weight:700;font-size:16px;">
-            ワンタップでコピー
-          </button>
-          <a href="{CLAUDE_OPEN_URL}" target="_blank" rel="noopener" style="display:block;box-sizing:border-box;width:100%;margin-top:8px;padding:12px 16px;border:1px solid #FC6719;border-radius:6px;color:#FC6719;text-align:center;font-weight:700;font-size:16px;text-decoration:none;">
-            Claudeを開く
-          </a>
-          <div style="margin:8px 0 0;color:#A7ADB8;font-size:13px;">カロミルのスクリーンショットがあれば、Claudeに貼るときに一緒に添付してください。</div>
-          <div id="copyStatus" style="margin:8px 0;color:#5BD08A;font-size:14px;"></div>
-          <textarea id="copyText" readonly style="width:100%;height:280px;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:12px;font-size:13px;line-height:1.45;">{escaped_text}</textarea>
+          <div style="display:flex;gap:8px;">
+            <button id="copyButton" style="flex:1;padding:12px 8px;border:0;border-radius:6px;background:#FC6719;color:white;font-weight:700;font-size:16px;">
+              ワンタップでコピー
+            </button>
+            <a href="{CLAUDE_OPEN_URL}" target="_blank" rel="noopener" style="flex:1;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:12px 8px;border:1px solid #FC6719;border-radius:6px;color:#FC6719;font-weight:700;font-size:16px;text-decoration:none;">
+              Claudeを開く
+            </a>
+          </div>
+          <div id="copyStatus" style="margin:8px 0 0;color:#5BD08A;font-size:14px;min-height:18px;"></div>
+          <div style="margin:4px 0 0;color:#A7ADB8;font-size:13px;">カロミルのスクリーンショットがあれば、Claudeに貼るときに一緒に添付してください。</div>
+          <textarea id="copyText" readonly aria-hidden="true" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;">{escaped_text}</textarea>
         </div>
         <script>
+        try {{
+          if (window.frameElement) {{
+            window.frameElement.scrollIntoView({{ block: "center", behavior: "smooth" }});
+          }}
+        }} catch (err) {{}}
         const button = document.getElementById("copyButton");
         const status = document.getElementById("copyStatus");
         const textArea = document.getElementById("copyText");
         button.addEventListener("click", async () => {{
-          textArea.focus();
-          textArea.select();
           try {{
             await navigator.clipboard.writeText(textArea.value);
-            status.textContent = "コピーしました。Claudeに貼り付けてください。";
           }} catch (err) {{
+            textArea.focus();
+            textArea.select();
             document.execCommand("copy");
-            status.textContent = "コピーしました。Claudeに貼り付けてください。";
           }}
+          status.textContent = "コピーしました。Claudeを開いて貼り付けてください。";
         }});
         </script>
         """,
-        height=450,
+        height=140,
     )
 
 
