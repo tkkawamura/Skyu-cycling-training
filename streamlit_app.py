@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v10"
+APP_VERSION = "2026-11-09-claude-nutrition-v11"
 
 FUELING_SETS = {
     "高強度": (
@@ -876,6 +876,19 @@ def inject_styles() -> None:
             background-color: var(--coach-bg) !important;
             color: var(--coach-text) !important;
             border: 1px solid #4A505B !important;
+        }
+        [data-testid="stBaseButton-segmented_control"],
+        [data-testid="stBaseButton-segmented_control"] p {
+            background-color: var(--coach-panel) !important;
+            color: var(--coach-text) !important;
+            border-color: #4A505B !important;
+        }
+        [data-testid="stBaseButton-segmented_controlActive"],
+        [data-testid="stBaseButton-segmented_controlActive"] p {
+            background-color: var(--coach-orange) !important;
+            color: #FFFFFF !important;
+            border-color: var(--coach-orange) !important;
+            font-weight: 700 !important;
         }
         [data-testid="stBaseButton-primary"], button[kind="primary"] {
             background-color: var(--coach-orange) !important;
