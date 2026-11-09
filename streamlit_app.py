@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v16"
+APP_VERSION = "2026-11-09-claude-nutrition-v17"
 
 FUELING_SETS = {
     "高強度": (
@@ -46,8 +46,6 @@ GOAL_LABEL = "富士ヒル75分"
 TARGET_FTP_W = 280
 TARGET_BODY_MASS_KG = 60.0
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
-CLAUDE_SHORTCUT_NAME = "Claudeトレーニング"
-CLAUDE_SHORTCUT_URL = "shortcuts://run-shortcut?name=Claude%E3%83%88%E3%83%AC%E3%83%BC%E3%83%8B%E3%83%B3%E3%82%B0"
 TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
 DETAILED_HISTORY_DAYS = 14
 LONG_HISTORY_DAYS = 42
@@ -1269,12 +1267,12 @@ def render_copy_box(text: str) -> None:
             <button id="copyButton" style="flex:1;padding:12px 8px;border:0;border-radius:6px;background:#FC6719;color:white;font-weight:700;font-size:16px;">
               ワンタップでコピー
             </button>
-            <a href="{CLAUDE_SHORTCUT_URL}" target="_blank" rel="noopener" style="flex:1;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:12px 8px;border:1px solid #FC6719;border-radius:6px;color:#FC6719;font-weight:700;font-size:16px;text-decoration:none;">
+            <a href="{CLAUDE_OPEN_URL}" target="_blank" rel="noopener" style="flex:1;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:12px 8px;border:1px solid #FC6719;border-radius:6px;color:#FC6719;font-weight:700;font-size:16px;text-decoration:none;">
               Claudeを開く
             </a>
           </div>
           <div id="copyStatus" style="margin:8px 0 0;color:#5BD08A;font-size:14px;min-height:18px;"></div>
-          <div style="margin:4px 0 0;color:#A7ADB8;font-size:13px;">カロミルのスクリーンショットがあれば、Claudeに貼るときに一緒に添付してください。 <a href="{CLAUDE_OPEN_URL}" target="_blank" rel="noopener" style="color:#A7ADB8;">ブラウザで開く</a></div>
+          <div style="margin:4px 0 0;color:#A7ADB8;font-size:13px;">カロミルのスクリーンショットがあれば、Claudeに貼るときに一緒に添付してください。</div>
           <textarea id="copyText" readonly aria-hidden="true" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;">{escaped_text}</textarea>
         </div>
         <script>
@@ -1298,7 +1296,7 @@ def render_copy_box(text: str) -> None:
         }});
         </script>
         """,
-        height=150,
+        height=140,
     )
 
 
