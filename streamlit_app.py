@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import gzip
@@ -21,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v4"
+APP_VERSION = "2026-11-09-claude-nutrition-v5"
 
 FUELING_SETS = {
     "高強度": (
@@ -45,7 +46,7 @@ LONG_HISTORY_DAYS = 42
 def main() -> None:
     st.set_page_config(page_title="S級コーチ", layout="wide")
     inject_styles()
-    st.markdown('<h1 class="app-title">S級コーチ</h1>', unsafe_allow_html=True)
+    st.markdown(f'<h1 class="app-title">{icon_img_tag()}<span>S級コーチ</span></h1>', unsafe_allow_html=True)
     st.caption(f"アプリ版: {APP_VERSION}")
 
     lookback_days = max(LONG_HISTORY_DAYS, int_setting("LOOKBACK_DAYS", LONG_HISTORY_DAYS))
@@ -88,6 +89,15 @@ def main() -> None:
                 include_prompt=True,
             )
         render_context(context)
+
+
+def icon_img_tag() -> str:
+    icon_path = Path(__file__).parent / "static" / "coach_icon.png"
+    try:
+        encoded = base64.b64encode(icon_path.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
+    return f'<img class="app-icon" src="data:image/png;base64,{encoded}" alt="">'
 
 
 def load_intervals_snapshot(lookback_days: int) -> dict[str, Any]:
@@ -733,11 +743,25 @@ def inject_styles() -> None:
             padding-bottom: 2rem !important;
         }
         h1.app-title {
-            font-size: 1.8rem !important;
-            line-height: 1.25 !important;
-            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            font-size: 2.4rem !important;
+            line-height: 1.15 !important;
+            font-weight: 800;
+            letter-spacing: 0.02em;
             padding: 0 !important;
-            margin: 0 0 0.2rem !important;
+            margin: 0 0 0.45rem !important;
+        }
+        h1.app-title span {
+            color: #FC6719;
+        }
+        .app-icon {
+            width: 3.2rem;
+            height: 3.2rem;
+            border-radius: 50%;
+            border: 2px solid #FC6719;
+            flex: none;
         }
         [data-testid="stFileUploaderDropzoneInstructions"] {
             display: none !important;
@@ -758,7 +782,7 @@ def inject_styles() -> None:
             min-width: 0;
         }
         .metric-label {
-            color: #586174;
+            color: #A7ADB8;
             font-size: 0.72rem;
             line-height: 1.2;
             margin-bottom: 0.18rem;
@@ -767,7 +791,7 @@ def inject_styles() -> None:
             text-overflow: ellipsis;
         }
         .metric-value {
-            color: #313342;
+            color: #F2F3F5;
             font-size: 1.08rem;
             line-height: 1.2;
             font-weight: 650;
@@ -780,7 +804,7 @@ def inject_styles() -> None:
                 padding-top: 0.8rem !important;
             }
             h1.app-title {
-                font-size: 1.5rem !important;
+                font-size: 2.1rem !important;
             }
             .metric-grid {
                 grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1071,7 +1095,7 @@ def render_copy_box(text: str) -> None:
     components.html(
         f"""
         <div style="font-family: sans-serif;">
-          <button id="copyButton" style="width:100%;padding:12px 16px;border:0;border-radius:6px;background:#ff4b4b;color:white;font-weight:700;font-size:16px;">
+          <button id="copyButton" style="width:100%;padding:12px 16px;border:0;border-radius:6px;background:#FC6719;color:white;font-weight:700;font-size:16px;">
             ワンタップでコピー
           </button>
           <div id="copyStatus" style="margin:8px 0;color:#0a7f32;font-size:14px;"></div>
