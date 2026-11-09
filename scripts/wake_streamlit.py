@@ -27,7 +27,7 @@ def main() -> int:
             print("Wake button not found. App is probably awake.")
 
         try:
-            page.frame_locator("iframe").locator("text=S級コーチ").first.wait_for(timeout=180_000)
+            page.frame_locator('iframe[title="streamlitApp"]').locator("text=S級コーチ").first.wait_for(timeout=180_000)
             print("App is up.")
         except PlaywrightTimeoutError:
             try:
