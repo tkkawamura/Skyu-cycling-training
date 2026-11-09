@@ -22,7 +22,7 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 
 load_dotenv()
 
-APP_VERSION = "2026-11-09-claude-nutrition-v5"
+APP_VERSION = "2026-11-09-claude-nutrition-v6"
 
 FUELING_SETS = {
     "高強度": (
@@ -735,6 +735,54 @@ def inject_styles() -> None:
     st.markdown(
         """
         <style>
+        :root {
+            --coach-bg: #14161A;
+            --coach-panel: #24272E;
+            --coach-text: #F2F3F5;
+            --coach-muted: #A7ADB8;
+            --coach-orange: #FC6719;
+        }
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            background-color: var(--coach-bg) !important;
+            color: var(--coach-text) !important;
+        }
+        .stApp label, .stApp label p, .stApp p, .stApp li, .stApp h2, .stApp h3,
+        [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+            color: var(--coach-text) !important;
+        }
+        [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+            color: var(--coach-muted) !important;
+        }
+        .stApp textarea, .stApp input, [data-baseweb="textarea"], [data-baseweb="input"],
+        [data-baseweb="base-input"], [data-baseweb="select"] > div,
+        [data-testid="stFileUploaderDropzone"] {
+            background-color: var(--coach-panel) !important;
+            color: var(--coach-text) !important;
+            border-color: #3A3F48 !important;
+        }
+        [data-baseweb="select"] div, [data-baseweb="select"] svg {
+            color: var(--coach-text) !important;
+            fill: var(--coach-text) !important;
+        }
+        .stApp textarea::placeholder, .stApp input::placeholder {
+            color: #7D8490 !important;
+        }
+        [data-baseweb="popover"] ul, [data-baseweb="popover"] li {
+            background-color: var(--coach-panel) !important;
+            color: var(--coach-text) !important;
+        }
+        [data-testid="stFileUploaderDropzone"] button,
+        [data-testid="stBaseButton-secondary"] {
+            background-color: var(--coach-bg) !important;
+            color: var(--coach-text) !important;
+            border: 1px solid #4A505B !important;
+        }
+        [data-testid="stBaseButton-primary"], button[kind="primary"] {
+            background-color: var(--coach-orange) !important;
+            border-color: var(--coach-orange) !important;
+            color: #FFFFFF !important;
+            font-weight: 700 !important;
+        }
         header[data-testid="stHeader"] {
             display: none;
         }
