@@ -2,9 +2,9 @@ name: Keep Streamlit app awake
 
 on:
   schedule:
-    # Every 2 hours, all day. GitHub delays scheduled runs by up to several hours,
+    # Every hour, all day. GitHub delays scheduled runs by up to several hours,
     # so frequent visits keep the app from ever falling asleep.
-    - cron: "17 */2 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 jobs:
