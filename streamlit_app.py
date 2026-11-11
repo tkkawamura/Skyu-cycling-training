@@ -23,7 +23,7 @@ from services.nutrition import compute_day_plan
 
 load_dotenv()
 
-APP_VERSION = "2026-11-10-claude-nutrition-v36"
+APP_VERSION = "2026-11-12-claude-nutrition-v37"
 
 FUELING_SETS = {
     "高強度": (
@@ -437,6 +437,10 @@ def is_ride(activity: dict[str, Any]) -> bool:
     return "ride" in sport or "cycling" in sport or "bike" in sport
 
 
+def is_run(activity: dict[str, Any]) -> bool:
+    return "run" in str(activity.get("type", "")).lower()
+
+
 def build_same_day_rides(intervals_payload: dict[str, Any], fit_context: dict[str, Any] | None) -> dict[str, Any] | None:
     latest = intervals_payload.get("latest_ride") or {}
     latest_date = parse_app_date(latest.get("date") or latest.get("start_time"))
@@ -448,7 +452,7 @@ def build_same_day_rides(intervals_payload: dict[str, Any], fit_context: dict[st
     if not any(str(item.get("id")) == str(latest.get("id")) for item in activities):
         activities.append({**latest, "type": latest.get("type") or "Ride"})
     for activity in activities:
-        if not isinstance(activity, dict) or not is_ride(activity):
+        if not isinstance(activity, dict) or not (is_ride(activity) or is_run(activity)):
             continue
         if parse_app_date(activity.get("date") or activity.get("start_time")) != latest_date:
             continue
@@ -460,8 +464,11 @@ def build_same_day_rides(intervals_payload: dict[str, Any], fit_context: dict[st
         elif work_kj is None:
             avg_w = to_float(activity.get("average_watts"))
             secs = to_float(activity.get("moving_time"))
+            calories = to_float(activity.get("calories"))
             if avg_w is not None and secs is not None:
                 work_kj, work_source = round(avg_w * secs / 1000, 1), "estimated_avg_power_x_time"
+            elif calories is not None:
+                work_kj, work_source = round(calories, 1), "calories"
             else:
                 work_source = "unknown"
         rides.append(
@@ -501,6 +508,8 @@ def markdown_same_day_rides(same_day: dict[str, Any] | None) -> list[str]:
         work = format_int_unit(ride.get("work_kj"), "kJ") or "-"
         if ride.get("work_kj_source") == "estimated_avg_power_x_time":
             work += "（推定）"
+        elif ride.get("work_kj_source") == "calories":
+            work = (format_int_unit(ride.get("work_kj"), "kcal") or "-") + "（消費kcal）"
         start = str(ride.get("start_time") or "-").replace("T", " ")[:16]
         rows.append(
             "|{start}|{name}|{time}|{tss}|{avgp}|{wp}|{work}|{flag}|".format(
@@ -2221,6 +2230,7 @@ def build_chatgpt_prompt() -> str:
         "Intervals.icuのフィットネス、ファティーグ、フォームは、アクティビティ値または当日ライド後値とTSSから差し戻したライド直前推定値です。\n"
         "自己分析は本人の主観情報です。データと照らし合わせ、感覚とデータが一致している点・ズレている点を指摘してください。\n\n"
         "読み取りルール:\n"
+        "- 当日にライドがなく、ランのアクティビティを評価対象にしている場合（最新ライドの種目がRunなど）は、ランとして評価してください。CP・W′・ケイデンス基準などサイクリング前提の指標は使わず、時間・距離・ペース・心拍・負荷を中心にしてください。\n"
         "- データ内にない事実は推測で補わないでください。\n"
         "- 安静時心拍は39 bpm前後をシーズンベスト級、40〜43 bpmを良好な状態として解釈してください。\n"
         "- HRVは45〜60 msを良好なベースラインとして解釈してください。\n"

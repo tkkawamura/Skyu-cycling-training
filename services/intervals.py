@@ -356,6 +356,7 @@ class IntervalsClient:
             "distance": normalize_distance_m(first_value(item, "distance", "Distance", "distance_m", "distanceMeters", "distance_meters", "total_distance", "totalDistance")),
             "training_load": number(first_value(item, "icu_training_load", "icuTrainingLoad", "training_load", "trainingLoad", "load", "Load", "tss", "TSS")),
             "work_kj": joules_to_kj(first_value(item, "icu_joules", "joules", "work_joules")),
+            "calories": number(first_value(item, "calories", "icu_calories", "kilojoules_calories")),
             "average_watts": number(first_value(item, "average_watts", "averageWatts", "Average Watts", "avg_power", "avgPower")),
             "weighted_average_watts": number(first_value(item, "weighted_average_watts", "weightedAverageWatts", "Weighted Average Watts", "normalized_power", "normalizedPower", "power")),
             "average_heartrate": number(first_value(item, "average_heartrate", "averageHeartrate", "average_heart_rate", "avg_hr", "avgHr", "Average Heart Rate")),
@@ -371,11 +372,20 @@ class IntervalsClient:
 
     def _find_latest_ride(self, activities: list[dict[str, Any]]) -> dict[str, Any] | None:
         ride_candidates = []
+        run_candidates = []
         for activity in activities:
             sport = str(activity.get("type", "")).lower()
             if "ride" in sport or "cycling" in sport or "bike" in sport:
                 ride_candidates.append(activity)
-        candidates = ride_candidates or activities
+            elif "run" in sport:
+                run_candidates.append(activity)
+        latest_ride_date = max((str(item.get("date") or "") for item in ride_candidates), default="")
+        latest_run_date = max((str(item.get("date") or "") for item in run_candidates), default="")
+        if run_candidates and latest_run_date > latest_ride_date:
+            # No ride on the most recent training day: analyze the run instead.
+            candidates = run_candidates
+        else:
+            candidates = ride_candidates or activities
         if not candidates:
             return None
 
