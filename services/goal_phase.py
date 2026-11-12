@@ -119,9 +119,12 @@ def decide_mode(
     today: date,
     tomorrow_option: str | None,
     current_weight: float | None = None,
+    manual_maintain: bool = False,
 ) -> dict[str, Any]:
     phase = weight_phase(trend, today, current_weight)
     reasons: list[str] = []
+    if manual_maintain:
+        reasons.append("本人が「今日は維持」を選択（体調のサイン）")
     if tomorrow_option in MAINTAIN_TOMORROW_OPTIONS:
         reasons.append("明日がFTPテスト・レース")
     reasons += fatigue_signals(trend, today)

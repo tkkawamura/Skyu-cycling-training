@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v39"
+APP_VERSION = "2026-11-12-claude-nutrition-v40"
 
 FUELING_SETS = {
     "高強度": (
@@ -83,7 +83,7 @@ SHORT_LABELS = {
     "高強度": "高強度",
     "2時間のZ2またはZ2上側": "Z2 2時間",
     "1時間半以内低強度": "低強度",
-    "低強度もしくはレスト": "低強度・レスト",
+    "低強度もしくはレスト": "低強度・休",
     "FTPテスト・レース": "FTP・レース",
 }
 TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト", "FTPテスト・レース"]
@@ -124,6 +124,7 @@ def main() -> None:
             format_func=lambda option: SHORT_LABELS.get(option, option),
         )
         day_type = st.segmented_control("今日の活動", list(DAY_TYPES), default="デスクワーク")
+        manual_maintain = st.toggle("今日は維持（体調のサインがある日）", value=False)
 
         uploaded_file = None
         uploaded_file = st.file_uploader("FIT / JSON（自動取得できない場合のみ）")
@@ -152,6 +153,7 @@ def main() -> None:
                     "tomorrow_plan": tomorrow_plan,
                     "day_type": DAY_TYPES.get(day_type or "デスクワーク"),
                     "day_type_key": day_type or "デスクワーク",
+                    "manual_maintain": bool(manual_maintain),
                 },
                 intervals_snapshot=intervals_snapshot,
                 include_prompt=True,
@@ -342,7 +344,7 @@ def build_nutrition_plan(
 ) -> dict[str, Any]:
     today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
     today_jst = today.isoformat()
-    mode = decide_mode(trend, today, manual.get("tomorrow_plan"), to_float(current_weight))
+    mode = decide_mode(trend, today, manual.get("tomorrow_plan"), to_float(current_weight), bool(manual.get("manual_maintain")))
     ride_kj = 0.0
     if same_day and same_day.get("date") == today_jst:
         ride_kj = to_float(same_day.get("total_work_kj")) or 0.0
@@ -1256,6 +1258,13 @@ def inject_styles() -> None:
         }
         [data-testid="stNumberInputContainer"], [data-testid="stNumberInputContainer"] button {
             background-color: var(--coach-panel) !important;
+            color: var(--coach-text) !important;
+        }
+        [data-testid="stCheckbox"] label > div:first-child[aria-checked="true"],
+        [data-testid="stCheckbox"] label input:checked + div {
+            background-color: var(--coach-orange) !important;
+        }
+        [data-testid="stCheckbox"] label p, [data-testid="stToggle"] label p {
             color: var(--coach-text) !important;
         }
         [data-testid="stVerticalBlock"] {
