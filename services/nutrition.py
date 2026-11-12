@@ -9,9 +9,10 @@ from typing import Any
 
 # --- Constants (edit here to change the rules) -----------------------------
 LIFE_KCAL = {"デスクワーク": 1750, "外出": 1950}
-DEFICIT_TRAIN = 150  # ride day (2026-11-12 UCI-based update: keep EA >= 30 kcal/kg FFM)
-DEFICIT_REST_BEFORE_HARD = 0  # rest day when tomorrow is high/mid intensity
-DEFICIT_REST_OTHER = 150  # rest day otherwise
+# Power-first periodization (2026-11-12): no deficit around hard sessions,
+# take the deficit on easy days. Keys are today's category.
+DEFICIT_BY_DAY = {"高強度": 0, "中強度": 200, "低強度": 250, "レスト": 250}
+DEFICIT_BEFORE_HARD = 0  # any day whose tomorrow is high intensity
 PROTEIN_G = 130
 FAT_G = {"高強度": 75, "中強度": 65, "低強度": 55, "レスト": 45}  # about 20%+ of energy
 C_FLOOR_G = 250  # lower bound of carbs on low-intensity and rest days
@@ -61,10 +62,10 @@ def compute_targets(
     life = LIFE_KCAL.get(day_type, LIFE_KCAL["デスクワーク"])
     if maintain:
         deficit = 0
-    elif today_category == "レスト":
-        deficit = DEFICIT_REST_BEFORE_HARD if tomorrow_category in ("高強度", "中強度") else DEFICIT_REST_OTHER
+    elif tomorrow_category == "高強度":
+        deficit = DEFICIT_BEFORE_HARD
     else:
-        deficit = DEFICIT_TRAIN
+        deficit = DEFICIT_BY_DAY[today_category]
     raw_kcal = life + ride_kj - deficit
     protein = PROTEIN_G
     fat = FAT_G[today_category]
