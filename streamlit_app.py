@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v45"
+APP_VERSION = "2026-11-12-claude-nutrition-v46"
 
 FUELING_SETS = {
     "高強度": (
@@ -44,7 +44,7 @@ DAY_TYPES = {
     "デスクワーク": "デスクワーク日（約3,000歩、生活分1,750kcal）",
     "外出": "外出日（約10,000歩、生活分1,950kcal、炭水化物+50g）",
 }
-GOAL_LABEL = "富士ヒル75分"
+GOAL_LABEL = "富士ヒル75分 → 最終65分（54.6kg時）"
 TARGET_FTP_W = 280
 TARGET_BODY_MASS_KG = GOAL_STAGES_KG[-1]  # final goal (BMI of 175cm/60kg at 167cm)
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
