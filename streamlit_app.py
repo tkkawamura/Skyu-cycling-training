@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v46"
+APP_VERSION = "2026-11-12-claude-nutrition-v47"
 
 FUELING_SETS = {
     "高強度": (
@@ -86,10 +86,9 @@ SHORT_LABELS = {
     "1時間半以内低強度": "低強度",
     "カロミル写真": "写真",
     "補給なし": "なし",
-    "低強度もしくはレスト": "低強度・休",
-    "FTPテスト・レース": "FTP・レース",
+    "低強度もしくはレスト": "低強度・レスト",
 }
-TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト", "FTPテスト・レース"]
+TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
 DETAILED_HISTORY_DAYS = 14
 LONG_HISTORY_DAYS = 42
 
@@ -122,7 +121,7 @@ def main() -> None:
         )
         carb_adjust_g = st.number_input("糖質調整（g）", min_value=-200, max_value=200, value=0, step=5, format="%d")
         tomorrow_plan = st.segmented_control(
-            "明日のトレーニング",
+            "明日のトレーニング（FTPテスト・レースは「高強度」）",
             TOMORROW_OPTIONS,
             format_func=lambda option: SHORT_LABELS.get(option, option),
         )
@@ -392,6 +391,8 @@ def markdown_goal_mode(plan: dict[str, Any]) -> list[str]:
         phase_text = "体重データなし（減量として計算）"
     if mode.get("maintain"):
         deficit_text = "赤字0（維持）：" + "、".join(mode.get("reasons") or [])
+    elif t["deficit"] == 0 and plan.get("tomorrow_category") == "高強度":
+        deficit_text = "赤字0（明日が高強度・FTPテスト・レースのため）"
     else:
         deficit_text = f"赤字{t['deficit']}kcal（減量）"
     return [
