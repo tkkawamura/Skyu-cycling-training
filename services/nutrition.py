@@ -11,7 +11,7 @@ from typing import Any
 LIFE_KCAL = {"デスクワーク": 1750, "外出": 1950}
 # Power-first periodization (2026-11-12): no deficit around hard sessions,
 # take the deficit on easy days. Keys are today's category.
-DEFICIT_BY_DAY = {"高強度": 0, "中強度": 200, "低強度": 250, "レスト": 250}
+DEFICIT_BY_DAY = {"高強度": 150, "中強度": 200, "低強度": 250, "レスト": 250}  # day before high stays 0
 DEFICIT_BEFORE_HARD = 0  # any day whose tomorrow is high intensity
 PROTEIN_G = 130
 FAT_RATIO = 0.20  # fat at the UCI lower bound (20% of energy); the rest goes to carbs
