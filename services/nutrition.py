@@ -14,7 +14,8 @@ LIFE_KCAL = {"デスクワーク": 1750, "外出": 1950}
 DEFICIT_BY_DAY = {"高強度": 0, "中強度": 200, "低強度": 250, "レスト": 250}
 DEFICIT_BEFORE_HARD = 0  # any day whose tomorrow is high intensity
 PROTEIN_G = 130
-FAT_G = {"高強度": 75, "中強度": 65, "低強度": 55, "レスト": 45}  # about 20%+ of energy
+FAT_RATIO = 0.20  # fat at the UCI lower bound (20% of energy); the rest goes to carbs
+FAT_MIN_G = 40
 C_FLOOR_G = 250  # lower bound of carbs on low-intensity and rest days
 C_FLOOR_OUTING_BONUS_G = 50
 KJ_HIGH = 1200
@@ -68,7 +69,7 @@ def compute_targets(
         deficit = DEFICIT_BY_DAY[today_category]
     raw_kcal = life + ride_kj - deficit
     protein = PROTEIN_G
-    fat = FAT_G[today_category]
+    fat = max(FAT_MIN_G, math.ceil(raw_kcal * FAT_RATIO / 9))
     carbs = round_half_up((raw_kcal - protein * 4 - fat * 9) / 4)
     floor_applied = False
     if today_category in ("低強度", "レスト"):
@@ -77,6 +78,10 @@ def compute_targets(
             carbs = floor
             floor_applied = True
     kcal = protein * 4 + fat * 9 + carbs * 4
+    # Keep fat at >= 20% even when the carb floor raised total energy.
+    while fat * 9 < kcal * FAT_RATIO:
+        fat += 1
+        kcal = protein * 4 + fat * 9 + carbs * 4
     return {
         "life_kcal": life,
         "ride_kj": round_half_up(ride_kj),

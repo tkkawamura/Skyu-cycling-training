@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v41"
+APP_VERSION = "2026-11-12-claude-nutrition-v42"
 
 FUELING_SETS = {
     "高強度": (
