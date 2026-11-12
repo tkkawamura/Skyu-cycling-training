@@ -18,6 +18,7 @@ FAT_RATIO = 0.20  # fat at the UCI lower bound (20% of energy); the rest goes to
 FAT_MIN_G = 40
 C_FLOOR_G = 250  # lower bound of carbs on low-intensity and rest days
 C_FLOOR_OUTING_BONUS_G = 50
+C_PER_KG_BEFORE_HARD = 5.5  # carb minimum (g/kg) on the day before a high-intensity session
 KJ_HIGH = 1200
 KJ_MID = 800
 CARB_SPLIT = {  # breakfast / lunch / dinner, decided by tomorrow's plan
@@ -58,7 +59,12 @@ def classify_today(ride_kj: float, fueling_option: str | None) -> str:
 
 
 def compute_targets(
-    day_type: str, ride_kj: float, today_category: str, tomorrow_category: str | None, maintain: bool = False
+    day_type: str,
+    ride_kj: float,
+    today_category: str,
+    tomorrow_category: str | None,
+    maintain: bool = False,
+    body_mass_kg: float | None = None,
 ) -> dict[str, Any]:
     life = LIFE_KCAL.get(day_type, LIFE_KCAL["デスクワーク"])
     if maintain:
@@ -77,6 +83,12 @@ def compute_targets(
         if carbs < floor:
             carbs = floor
             floor_applied = True
+    pre_hard_floor = None
+    if tomorrow_category == "高強度" and body_mass_kg:
+        pre_hard_floor = math.ceil(C_PER_KG_BEFORE_HARD * body_mass_kg)
+        if carbs < pre_hard_floor:
+            carbs = pre_hard_floor
+            floor_applied = True
     kcal = protein * 4 + fat * 9 + carbs * 4
     # Keep fat at >= 20% even when the carb floor raised total energy.
     while fat * 9 < kcal * FAT_RATIO:
@@ -91,6 +103,7 @@ def compute_targets(
         "c": carbs,
         "kcal": kcal,
         "c_floor_applied": floor_applied,
+        "pre_hard_floor": pre_hard_floor,
     }
 
 
@@ -106,8 +119,9 @@ def split_meals(remaining: dict[str, int], tomorrow_category: str | None) -> dic
     f_l = round_half_up((remaining["f"] - f_b) / 2, 5)
     f_d = remaining["f"] - f_b - f_l
 
-    c_b = round_half_up(remaining["c"] * c_share[0], 5)
-    c_l = round_half_up(remaining["c"] * c_share[1], 5)
+    # Round breakfast/lunch carbs down so dinner never gets less than its share.
+    c_b = int(remaining["c"] * c_share[0] // 5) * 5
+    c_l = int(remaining["c"] * c_share[1] // 5) * 5
     c_d = remaining["c"] - c_b - c_l
 
     k_b = round_half_up(p_b * 4 + f_b * 9 + c_b * 4, 10)
@@ -129,11 +143,12 @@ def compute_day_plan(
     supply: dict[str, float] | None,
     tomorrow_option: str | None,
     maintain: bool = False,
+    body_mass_kg: float | None = None,
 ) -> dict[str, Any]:
     """supply is the confirmed fueling (kcal, p, f, c) or None when it comes from a photo."""
     today_category = classify_today(ride_kj, fueling_option)
     tomorrow_category = TOMORROW_CATEGORY.get(tomorrow_option or "")
-    targets = compute_targets(day_type, ride_kj, today_category, tomorrow_category, maintain)
+    targets = compute_targets(day_type, ride_kj, today_category, tomorrow_category, maintain, body_mass_kg)
     plan: dict[str, Any] = {
         "today_category": today_category,
         "tomorrow_category": tomorrow_category,
