@@ -19,12 +19,12 @@ from dotenv import load_dotenv
 from services.fit_context import AthleteInputs, FitActivityContextBuilder
 from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 from services.nutrition import compute_day_plan
-from services.goal_phase import GOAL_STAGES_KG, decide_mode
+from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v47"
+APP_VERSION = "2026-11-13-claude-nutrition-v48"
 
 FUELING_SETS = {
     "高強度": (
@@ -363,6 +363,7 @@ def build_nutrition_plan(
     )
     plan["today_jst"] = today_jst
     plan["mode"] = mode
+    plan["baselines"] = condition_baselines(trend, today)
     return plan
 
 
@@ -371,6 +372,32 @@ def fmt_num(value: Any) -> str:
     if number is None:
         return "-"
     return f"{round(number):,}"
+
+
+def markdown_baselines(metrics: dict[str, Any], baselines: dict[str, Any] | None) -> list[str]:
+    if not baselines:
+        return []
+    rows = [
+        "## 直近28日平均との比較（今日を除く・ツール計算）",
+        "|項目|今日|28日平均|差|平均の元データ|",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for key, label, unit in (("resting_heart_rate", "安静時心拍", "bpm"), ("hrv", "HRV", "ms"), ("sleep_score", "睡眠スコア", "")):
+        info = baselines.get(key) or {}
+        avg = info.get("avg")
+        today_value = to_float(metrics.get(key))
+        if avg is None:
+            rows.append(f"|{label}|{display(today_value, unit)}|-|-|0日|")
+            continue
+        diff = today_value - avg if today_value is not None else None
+        diff_text = "-"
+        if diff is not None:
+            diff_text = f"{diff:+.1f}{unit}"
+            if key == "hrv" and avg:
+                diff_text += f"（{diff / avg * 100:+.0f}%）"
+        rows.append(f"|{label}|{display(today_value, unit)}|{avg:.1f}{unit}|{diff_text}|{info.get('days')}日|")
+    rows.append("")
+    return rows
 
 
 def markdown_goal_mode(plan: dict[str, Any]) -> list[str]:
@@ -1728,6 +1755,7 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"|最大心拍|{display(metrics.get('max_heart_rate'), 'bpm')}|",
         f"|基準|{display(metrics.get('condition_baseline'))} / {display(metrics.get('condition_baseline_date'))}|",
         "",
+        *markdown_baselines(metrics, (context.get("nutrition_plan") or {}).get("baselines")),
         "## コンディション解釈基準",
         "- 安静時心拍: 39 bpm前後はシーズンベスト級、40〜43 bpmは良好な状態として扱う。直近28日平均より5bpm以上高い日は疲労のサイン。",
         "- HRV: 本人の直近28日平均を基準に評価する。平均より15%以上低い日は疲労のサイン（ツールはこの基準で「赤字0（維持）」を自動判定している）。絶対値45ms未満も低下として扱う。",
@@ -2309,6 +2337,7 @@ def build_chatgpt_prompt() -> str:
         "- 当日にライドがなく、ランのアクティビティを評価対象にしている場合（最新ライドの種目がRunなど）は、ランとして評価してください。CP・W′・ケイデンス基準などサイクリング前提の指標は使わず、時間・距離・ペース・心拍・負荷を中心にしてください。\n"
         "- データ内にない事実は推測で補わないでください。\n"
         "- 安静時心拍は39 bpm前後をシーズンベスト級、40〜43 bpmを良好な状態として解釈してください。\n"
+        "- HRVと安静時心拍の28日平均は「直近28日平均との比較」の表にあります。この表を使って比較してください。\n"
         "- HRVは本人の直近28日平均を基準に解釈してください。平均より15%以上低い日は疲労のサインです（ツールの維持判定と同じ基準）。「今日の方針」が維持になっている日は、その理由と矛盾する評価をしないでください。\n"
         "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
         "- サイクリングダイナミクスは、Power Phase、Peak Power Phase、Platform Center Offset、左右バランス、Torque Effectiveness、Pedal Smoothnessの値がある場合だけ評価してください。\n"

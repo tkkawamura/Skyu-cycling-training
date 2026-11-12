@@ -99,6 +99,23 @@ def weight_phase(trend: list[dict[str, Any]] | None, today: date, current_weight
     return {"status": "final_maintain", "stage": total, "total": total, "target": GOAL_STAGES_KG[-1], "final": GOAL_STAGES_KG[-1], "weight_avg": weight, "maintain": True}
 
 
+def condition_baselines(trend: list[dict[str, Any]] | None, today: date) -> dict[str, Any]:
+    """28-day averages (excluding today) used for the fatigue checks."""
+    rows = _rows(trend, today)
+    base_start = today - timedelta(days=BASELINE_DAYS)
+    base_rows = [row for row in rows if base_start <= row["_date"] < today]
+
+    def summary(key: str) -> dict[str, Any]:
+        values = [float(row[key]) for row in base_rows if row.get(key) is not None]
+        return {"avg": mean(values) if values else None, "days": len(values)}
+
+    return {
+        "resting_heart_rate": summary("resting_heart_rate"),
+        "hrv": summary("hrv"),
+        "sleep_score": summary("sleep_score"),
+    }
+
+
 def fatigue_signals(trend: list[dict[str, Any]] | None, today: date) -> list[str]:
     rows = _rows(trend, today)
     today_row = next((row for row in reversed(rows) if row["_date"] == today), None)
