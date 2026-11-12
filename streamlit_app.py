@@ -23,7 +23,7 @@ from services.nutrition import compute_day_plan
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v37"
+APP_VERSION = "2026-11-12-claude-nutrition-v38"
 
 FUELING_SETS = {
     "高強度": (

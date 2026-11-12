@@ -9,11 +9,11 @@ from typing import Any
 
 # --- Constants (edit here to change the rules) -----------------------------
 LIFE_KCAL = {"デスクワーク": 1750, "外出": 1950}
-DEFICIT_TRAIN = 350  # ride day (middle of -300..-400)
+DEFICIT_TRAIN = 150  # ride day (2026-11-12 UCI-based update: keep EA >= 30 kcal/kg FFM)
 DEFICIT_REST_BEFORE_HARD = 0  # rest day when tomorrow is high/mid intensity
 DEFICIT_REST_OTHER = 150  # rest day otherwise
 PROTEIN_G = 130
-FAT_G = {"高強度": 55, "中強度": 50, "低強度": 40, "レスト": 40}
+FAT_G = {"高強度": 75, "中強度": 65, "低強度": 55, "レスト": 45}  # about 20%+ of energy
 C_FLOOR_G = 250  # lower bound of carbs on low-intensity and rest days
 C_FLOOR_OUTING_BONUS_G = 50
 KJ_HIGH = 1200
