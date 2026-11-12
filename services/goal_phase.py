@@ -13,6 +13,7 @@ from typing import Any
 # Final goal: same BMI as 175cm/60kg (19.6) at 167cm -> about 54.6kg.
 GOAL_STAGES_KG = [60.0, 57.0, 54.6]
 MAINTENANCE_DAYS = 14  # hold weight this long after reaching each stage
+REBOUND_MARGIN_KG = 0.5  # stay in the reached stage until the average rebounds this far above it
 WEIGHT_AVG_DAYS = 7
 BASELINE_DAYS = 28
 RHR_RISE_BPM = 5  # resting HR this much above baseline -> maintain
@@ -48,6 +49,20 @@ def rolling_weight(rows: list[dict[str, Any]], on: date) -> float | None:
     return _avg([row.get("weight") for row in rows if start <= row["_date"] <= on])
 
 
+def stage_reached_on(rows: list[dict[str, Any]], days: list[date], target: float) -> date | None:
+    """First day of the current spell at/below target. A rebound above target+margin resets it."""
+    reached = None
+    for day in days:
+        avg = rolling_weight(rows, day)
+        if avg is None:
+            continue
+        if avg > target + REBOUND_MARGIN_KG:
+            reached = None
+        elif avg <= target and reached is None:
+            reached = day
+    return reached
+
+
 def weight_phase(trend: list[dict[str, Any]] | None, today: date, current_weight: float | None = None) -> dict[str, Any]:
     rows = _rows(trend, today)
     weight = rolling_weight(rows, today)
@@ -57,19 +72,14 @@ def weight_phase(trend: list[dict[str, Any]] | None, today: date, current_weight
     if weight is None:
         return {"status": "unknown", "stage": 1, "total": total, "target": GOAL_STAGES_KG[0], "final": GOAL_STAGES_KG[-1], "weight_avg": None, "maintain": False}
 
-    days = sorted({row["_date"] for row in rows})
+    days = sorted({row["_date"] for row in rows} | {today})
     for index, target in enumerate(GOAL_STAGES_KG):
         stage = index + 1
-        if weight > target:
-            return {"status": "cutting", "stage": stage, "total": total, "target": target, "final": GOAL_STAGES_KG[-1], "weight_avg": weight, "maintain": False}
-        reached = None
-        for day in days:
-            avg = rolling_weight(rows, day)
-            if avg is not None and avg <= target:
-                reached = day
-                break
-        if reached is None:
+        reached = stage_reached_on(rows, days, target)
+        if reached is None and weight <= target:
             reached = today
+        if reached is None:
+            return {"status": "cutting", "stage": stage, "total": total, "target": target, "final": GOAL_STAGES_KG[-1], "weight_avg": weight, "maintain": False}
         held = (today - reached).days + 1
         if index == total - 1:
             return {"status": "final_maintain", "stage": stage, "total": total, "target": target, "final": target, "weight_avg": weight, "maintain": True, "reached": reached.isoformat()}

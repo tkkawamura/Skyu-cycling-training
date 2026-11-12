@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v44"
+APP_VERSION = "2026-11-12-claude-nutrition-v45"
 
 FUELING_SETS = {
     "高強度": (
@@ -79,10 +79,13 @@ FUELING_MEMO_MD = """
 """
 
 FUELING_PHOTO = "カロミル写真"
+FUELING_NONE = "補給なし"
 SHORT_LABELS = {
     "高強度": "高強度",
     "2時間のZ2またはZ2上側": "Z2 2時間",
     "1時間半以内低強度": "低強度",
+    "カロミル写真": "写真",
+    "補給なし": "なし",
     "低強度もしくはレスト": "低強度・休",
     "FTPテスト・レース": "FTP・レース",
 }
@@ -113,7 +116,7 @@ def main() -> None:
             st.markdown(FUELING_MEMO_MD)
         fueling_set = st.segmented_control(
             "トレーニング前・中の補給",
-            [*FUELING_SETS, FUELING_PHOTO],
+            [*FUELING_SETS, FUELING_PHOTO, FUELING_NONE],
             format_func=lambda option: SHORT_LABELS.get(option, option),
             label_visibility="collapsed",
         )
@@ -131,7 +134,9 @@ def main() -> None:
         submitted = st.form_submit_button("Claude貼り付け用テキストを生成", type="primary", use_container_width=True)
 
     if submitted and not fueling_set:
-        st.error("トレーニング前・中の補給を選んでください（カロミルの写真を添付する日は「カロミル写真」）。")
+        st.error("トレーニング前・中の補給を選んでください（カロミルの写真を添付する日は「写真」、補給していない日は「なし」）。")
+    elif submitted and not tomorrow_plan:
+        st.error("明日のトレーニングを選んでください（赤字と炭水化物の配分が変わります）。")
     elif submitted:
         with st.spinner("Intervals.icu情報とFITを解析しています..."):
             context = generate_context(
@@ -410,8 +415,10 @@ def fueling_basis_line(manual: dict[str, Any]) -> str:
             text = f"「{label}」パターン（カロミル登録値 {base['kcal']}kcal・C{base['c']}g）から、アプリで糖質{adjust:+d}g調整済み"
         elif base:
             text = f"「{label}」パターン（カロミル登録値 {base['kcal']}kcal・C{base['c']}g）のまま（調整なし）"
+        elif adjust:
+            text = f"補給なし、アプリで糖質{adjust:+d}g"
         else:
-            text = f"パターンなし、アプリで糖質{adjust:+d}g"
+            text = "補給なし"
     return f"※トレーニング補給：{text}"
 
 
@@ -495,6 +502,7 @@ def build_same_day_rides(intervals_payload: dict[str, Any], fit_context: dict[st
     if not latest_date:
         return None
     fit_work_kj = to_float((((fit_context or {}).get("llm_summary") or {}).get("session_summary") or {}).get("total_work_kj"))
+    body_mass_kg = to_float((intervals_payload.get("metrics") or {}).get("weight"))
     rides = []
     activities = [item for item in (intervals_payload.get("recent_activities") or []) if isinstance(item, dict)]
     if not any(str(item.get("id")) == str(latest.get("id")) for item in activities):
@@ -507,7 +515,17 @@ def build_same_day_rides(intervals_payload: dict[str, Any], fit_context: dict[st
         analyzed = str(activity.get("id")) == str(latest.get("id"))
         work_kj = to_float(activity.get("work_kj"))
         work_source = "intervals"
-        if analyzed and fit_work_kj is not None:
+        if is_run(activity):
+            # Running power kJ is not comparable to cycling kJ: use burned kcal instead.
+            calories = to_float(activity.get("calories"))
+            distance_km = (to_float(activity.get("distance")) or 0) / 1000
+            if calories:
+                work_kj, work_source = round(calories, 1), "calories"
+            elif distance_km and body_mass_kg:
+                work_kj, work_source = round(distance_km * body_mass_kg, 1), "run_estimate"
+            else:
+                work_kj, work_source = None, "unknown"
+        elif analyzed and fit_work_kj is not None:
             work_kj, work_source = fit_work_kj, "fit"
         elif work_kj is None:
             avg_w = to_float(activity.get("average_watts"))
@@ -548,7 +566,7 @@ def markdown_same_day_rides(same_day: dict[str, Any] | None) -> list[str]:
         return []
     rows = [
         f"- 対象日: {same_day.get('date')} / ライド数: {same_day.get('ride_count')}本 / 合計仕事量: {format_int_unit(same_day.get('total_work_kj'), 'kJ') or '-'}",
-        "- 詳細なFIT解析は「詳細解析=○」の1本のみ。栄養計算のライドkJは合計仕事量を使う。",
+        "- 詳細なFIT解析は「詳細解析=○」の1本のみ。栄養計算のライドkJは合計仕事量を使う。ランはランニングパワーではなく消費kcalで数える（FITセッション要約の仕事量とは一致しない）。",
         "|開始|名前|時間|TSS|平均P|加重P|仕事量|詳細解析|",
         "|---|---|---:|---:|---:|---:|---:|---|",
     ]
@@ -558,6 +576,8 @@ def markdown_same_day_rides(same_day: dict[str, Any] | None) -> list[str]:
             work += "（推定）"
         elif ride.get("work_kj_source") == "calories":
             work = (format_int_unit(ride.get("work_kj"), "kcal") or "-") + "（消費kcal）"
+        elif ride.get("work_kj_source") == "run_estimate":
+            work = (format_int_unit(ride.get("work_kj"), "kcal") or "-") + "（距離×体重の推定）"
         start = str(ride.get("start_time") or "-").replace("T", " ")[:16]
         rows.append(
             "|{start}|{name}|{time}|{tss}|{avgp}|{wp}|{work}|{flag}|".format(
@@ -1708,8 +1728,8 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"|基準|{display(metrics.get('condition_baseline'))} / {display(metrics.get('condition_baseline_date'))}|",
         "",
         "## コンディション解釈基準",
-        "- 安静時心拍: 39 bpm前後はシーズンベスト級、40〜43 bpmは良好な状態として扱う。",
-        "- HRV: 45〜60 msを良好なベースラインとして扱う。",
+        "- 安静時心拍: 39 bpm前後はシーズンベスト級、40〜43 bpmは良好な状態として扱う。直近28日平均より5bpm以上高い日は疲労のサイン。",
+        "- HRV: 本人の直近28日平均を基準に評価する。平均より15%以上低い日は疲労のサイン（ツールはこの基準で「赤字0（維持）」を自動判定している）。絶対値45ms未満も低下として扱う。",
         "",
         "## 最新ライド",
         "|項目|値|",
@@ -2288,7 +2308,7 @@ def build_chatgpt_prompt() -> str:
         "- 当日にライドがなく、ランのアクティビティを評価対象にしている場合（最新ライドの種目がRunなど）は、ランとして評価してください。CP・W′・ケイデンス基準などサイクリング前提の指標は使わず、時間・距離・ペース・心拍・負荷を中心にしてください。\n"
         "- データ内にない事実は推測で補わないでください。\n"
         "- 安静時心拍は39 bpm前後をシーズンベスト級、40〜43 bpmを良好な状態として解釈してください。\n"
-        "- HRVは45〜60 msを良好なベースラインとして解釈してください。\n"
+        "- HRVは本人の直近28日平均を基準に解釈してください。平均より15%以上低い日は疲労のサインです（ツールの維持判定と同じ基準）。「今日の方針」が維持になっている日は、その理由と矛盾する評価をしないでください。\n"
         "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
         "- サイクリングダイナミクスは、Power Phase、Peak Power Phase、Platform Center Offset、左右バランス、Torque Effectiveness、Pedal Smoothnessの値がある場合だけ評価してください。\n"
         "- サイクリングダイナミクス診断でmissingの項目は、推測せず「FITに未収録または未検出」と扱ってください。\n"
