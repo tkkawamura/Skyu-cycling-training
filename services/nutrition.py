@@ -35,6 +35,7 @@ TOMORROW_CATEGORY = {
     "高強度": "高強度",
     "2時間のZ2またはZ2上側": "中強度",
     "低強度もしくはレスト": "低強度",
+    "FTPテスト・レース": "高強度",
 }
 
 
@@ -54,9 +55,13 @@ def classify_today(ride_kj: float, fueling_option: str | None) -> str:
     return "低強度"
 
 
-def compute_targets(day_type: str, ride_kj: float, today_category: str, tomorrow_category: str | None) -> dict[str, Any]:
+def compute_targets(
+    day_type: str, ride_kj: float, today_category: str, tomorrow_category: str | None, maintain: bool = False
+) -> dict[str, Any]:
     life = LIFE_KCAL.get(day_type, LIFE_KCAL["デスクワーク"])
-    if today_category == "レスト":
+    if maintain:
+        deficit = 0
+    elif today_category == "レスト":
         deficit = DEFICIT_REST_BEFORE_HARD if tomorrow_category in ("高強度", "中強度") else DEFICIT_REST_OTHER
     else:
         deficit = DEFICIT_TRAIN
@@ -117,11 +122,12 @@ def compute_day_plan(
     fueling_option: str | None,
     supply: dict[str, float] | None,
     tomorrow_option: str | None,
+    maintain: bool = False,
 ) -> dict[str, Any]:
     """supply is the confirmed fueling (kcal, p, f, c) or None when it comes from a photo."""
     today_category = classify_today(ride_kj, fueling_option)
     tomorrow_category = TOMORROW_CATEGORY.get(tomorrow_option or "")
-    targets = compute_targets(day_type, ride_kj, today_category, tomorrow_category)
+    targets = compute_targets(day_type, ride_kj, today_category, tomorrow_category, maintain)
     plan: dict[str, Any] = {
         "today_category": today_category,
         "tomorrow_category": tomorrow_category,

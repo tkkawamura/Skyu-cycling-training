@@ -19,11 +19,12 @@ from dotenv import load_dotenv
 from services.fit_context import AthleteInputs, FitActivityContextBuilder
 from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 from services.nutrition import compute_day_plan
+from services.goal_phase import GOAL_STAGES_KG, decide_mode
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-12-claude-nutrition-v38"
+APP_VERSION = "2026-11-12-claude-nutrition-v39"
 
 FUELING_SETS = {
     "高強度": (
@@ -45,7 +46,7 @@ DAY_TYPES = {
 }
 GOAL_LABEL = "富士ヒル75分"
 TARGET_FTP_W = 280
-TARGET_BODY_MASS_KG = 60.0
+TARGET_BODY_MASS_KG = GOAL_STAGES_KG[-1]  # final goal (BMI of 175cm/60kg at 167cm)
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
 FUELING_TOTALS = {
     "高強度": {"kcal": 525, "p": 12.1, "f": 0.6, "c": 119.6},
@@ -83,8 +84,9 @@ SHORT_LABELS = {
     "2時間のZ2またはZ2上側": "Z2 2時間",
     "1時間半以内低強度": "低強度",
     "低強度もしくはレスト": "低強度・レスト",
+    "FTPテスト・レース": "FTP・レース",
 }
-TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト"]
+TOMORROW_OPTIONS = ["高強度", "2時間のZ2またはZ2上側", "低強度もしくはレスト", "FTPテスト・レース"]
 DETAILED_HISTORY_DAYS = 14
 LONG_HISTORY_DAYS = 42
 
@@ -311,7 +313,7 @@ def generate_context(
         "manual_inputs": manual_inputs,
         "intervals_icu": intervals_context,
         "same_day_rides": same_day_rides,
-        "nutrition_plan": build_nutrition_plan(manual_inputs, same_day_rides),
+        "nutrition_plan": build_nutrition_plan(manual_inputs, same_day_rides, intervals_payload.get("trend"), metrics.get("weight")),
         "llm_review_summary": build_review_summary(intervals_context, compact_fit_context, manual_inputs),
         "fit_activity_context": compact_fit_context,
         "uploaded_json_context": uploaded_json_context if uploaded_json_context and fit_context is None else None,
@@ -332,8 +334,15 @@ def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
     return {"kcal": base["kcal"] + adjust * 4, "p": base["p"], "f": base["f"], "c": base["c"] + adjust}
 
 
-def build_nutrition_plan(manual: dict[str, Any], same_day: dict[str, Any] | None) -> dict[str, Any]:
-    today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).date().isoformat()
+def build_nutrition_plan(
+    manual: dict[str, Any],
+    same_day: dict[str, Any] | None,
+    trend: list[dict[str, Any]] | None = None,
+    current_weight: Any = None,
+) -> dict[str, Any]:
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    today_jst = today.isoformat()
+    mode = decide_mode(trend, today, manual.get("tomorrow_plan"), to_float(current_weight))
     ride_kj = 0.0
     if same_day and same_day.get("date") == today_jst:
         ride_kj = to_float(same_day.get("total_work_kj")) or 0.0
@@ -343,8 +352,10 @@ def build_nutrition_plan(manual: dict[str, Any], same_day: dict[str, Any] | None
         fueling_option=None if manual.get("fueling_set") == FUELING_PHOTO else manual.get("fueling_set"),
         supply=confirmed_supply(manual),
         tomorrow_option=manual.get("tomorrow_plan"),
+        maintain=mode["maintain"],
     )
     plan["today_jst"] = today_jst
+    plan["mode"] = mode
     return plan
 
 
@@ -353,6 +364,35 @@ def fmt_num(value: Any) -> str:
     if number is None:
         return "-"
     return f"{round(number):,}"
+
+
+def markdown_goal_mode(plan: dict[str, Any]) -> list[str]:
+    mode = plan.get("mode") or {}
+    phase = mode.get("phase") or {}
+    t = plan["targets"]
+    stages = " → ".join(f"{kg:g}kg" for kg in GOAL_STAGES_KG)
+    weight = phase.get("weight_avg")
+    weight_text = f"{weight:.1f}kg" if weight is not None else "不明"
+    status = phase.get("status")
+    if status == "cutting":
+        phase_text = f"段階{phase['stage']}/{phase['total']}：{phase['target']:g}kgまで減量中（あと{weight - phase['target']:.1f}kg）"
+    elif status == "stage_maintain":
+        phase_text = f"段階{phase['stage']}/{phase['total']}：{phase['target']:g}kg到達、維持期間{phase['held_days']}日目（次は{phase['next_target']:g}kg）"
+    elif status == "final_maintain":
+        phase_text = f"最終目標{phase['final']:g}kgに到達（維持）"
+    else:
+        phase_text = "体重データなし（減量として計算）"
+    if mode.get("maintain"):
+        deficit_text = "赤字0（維持）：" + "、".join(mode.get("reasons") or [])
+    else:
+        deficit_text = f"赤字{t['deficit']}kcal（減量）"
+    return [
+        "### 今日の目標設定",
+        f"- 体重目標：{stages}（最終は175cm・60kgと同じBMI19.6）",
+        f"- 現在：7日平均{weight_text} ／ {phase_text}",
+        f"- 今日の方針：{deficit_text}",
+        f"- 今日のターゲット：{fmt_num(t['kcal'])}kcal / P{t['p']}g / F{t['f']}g / C{t['c']}g（トレーニング補給込み）",
+    ]
 
 
 def fueling_basis_line(manual: dict[str, Any]) -> str:
@@ -379,7 +419,8 @@ def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any])
     supply = plan.get("supply")
     share = plan.get("carb_share") or (0, 0, 0)
     share_text = "/".join(f"{round(x * 100)}%" for x in share)
-    lines = [
+    lines = [*markdown_goal_mode(plan), ""]
+    lines += [
         "### 今日の目標とトレーニング補給",
         "|区分|P(g)|F(g)|C(g)|kcal|",
         "|---|---:|---:|---:|---:|",
@@ -1759,7 +1800,7 @@ def markdown_goal_progress(metrics: dict[str, Any], athlete_inputs: dict[str, An
     target_wkg = TARGET_FTP_W / TARGET_BODY_MASS_KG
     current_wkg = ftp / weight if ftp and weight else None
     rows = [
-        f"- 目標: {GOAL_LABEL}（FTP {TARGET_FTP_W}W・体重{TARGET_BODY_MASS_KG:.0f}kg = {target_wkg:.2f}W/kg）",
+        f"- 目標: {GOAL_LABEL}（FTP {TARGET_FTP_W}W・体重{TARGET_BODY_MASS_KG:.1f}kg = {target_wkg:.2f}W/kg、段階目標 {" → ".join(f"{kg:g}kg" for kg in GOAL_STAGES_KG)}）",
         "|項目|現在|目標|差|",
         "|---|---:|---:|---:|",
         "|FTP|{cur}|{tgt}W|{diff}|".format(
@@ -2246,7 +2287,7 @@ def build_chatgpt_prompt() -> str:
         "- 医療・診断ではなく、トレーニング上の示唆に限定してください。\n"
         "- 表と短い箇条書きを使い、要点を短く伝えてください。\n\n"
         "栄養ルール:\n"
-        "- 「今日の栄養」はツールが計算済みです。「今日の栄養（ツール計算済み）」の2つの表と※の行を、数値・列・行を一切変えずに転記してください。再計算しないでください。\n"
+        "- 「今日の栄養」はツールが計算済みです。「今日の目標設定」の4行、2つの表、※の行を、数値・列・行を一切変えずに転記してください。再計算しないでください。\n"
         "- 表の後に「食べ方の例（量は目安）」を、朝・昼・夕1行ずつ、各食の数値に合う内容で書いてください。間食は作らないでください。\n"
         "- 最後に、明日のトレーニングに向けた炭水化物の考え方を1〜2行で書いてください。\n"
         "- カロミルのスクリーンショットが添付された日で、画像の値と表の補給値が違えば、その違いを指摘するだけにしてください。\n"
