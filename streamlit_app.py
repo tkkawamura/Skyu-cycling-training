@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-13-claude-nutrition-v49"
+APP_VERSION = "2026-11-13-claude-nutrition-v50"
 
 FUELING_SETS = {
     "高強度": (
@@ -1692,9 +1692,22 @@ def render_copy_box(text: str) -> None:
     )
 
 
+def build_paste_title(context: dict[str, Any]) -> str:
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    weekday = "月火水木金土日"[today.weekday()]
+    plan = context.get("nutrition_plan") or {}
+    category = plan.get("today_category") or ""
+    return f"🐣S級コーチ日報 {today.month}/{today.day}({weekday}) {category}".rstrip()
+
+
 def build_paste_text(context: dict[str, Any]) -> str:
     prompt = context.get("chatgpt_usage", {}).get("recommended_prompt") or build_chatgpt_prompt()
-    return f"{prompt}\n\n{build_history_prompt_addendum()}\n\n{build_review_markdown(context)}"
+    title = build_paste_title(context)
+    header = (
+        f"# {title}\n"
+        f"（このチャットのタイトルは「{title}」にしてください。回答の1行目にも同じ見出しを書いてください）"
+    )
+    return f"{header}\n\n{prompt}\n\n{build_history_prompt_addendum()}\n\n{build_review_markdown(context)}"
 
 
 def build_history_prompt_addendum() -> str:
