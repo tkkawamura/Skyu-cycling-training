@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-13-claude-nutrition-v50"
+APP_VERSION = "2026-11-15-claude-nutrition-v51"
 
 FUELING_SETS = {
     "高強度": (
@@ -492,10 +492,14 @@ def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any])
     for warning in plan.get("warnings") or []:
         lines += [warning, ""]
     if supply is None:
-        x_line = "X用の目標表記：食事目標◯kcal P◯/F◯/C◯（朝昼夕の合計を、画像から計算した値で埋める）"
+        x_line = "X用の目標表記：食事目標◯kcal 朝◯g/◯g/◯g 昼◯g/◯g/◯g 夜◯g/◯g/◯g（P/F/Cの順。画像から計算した朝昼夕の値で埋める）"
     else:
         r = plan["remaining"]
-        x_line = f"X用の目標表記：食事目標{fmt_num(r['kcal'])}kcal P{r['p']}/F{r['f']}/C{r['c']}"
+        meals = list(plan["meals"].values())
+        meal_text = " ".join(
+            f"{label}{m['p']}g/{m['f']}g/{m['c']}g" for label, m in zip(("朝", "昼", "夜"), meals)
+        )
+        x_line = f"X用の目標表記：食事目標{fmt_num(r['kcal'])}kcal {meal_text}"
     lines += [
         x_line,
         "",
