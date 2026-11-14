@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-15-claude-nutrition-v51"
+APP_VERSION = "2026-11-15-claude-nutrition-v52"
 
 FUELING_SETS = {
     "高強度": (
@@ -492,16 +492,27 @@ def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any])
     for warning in plan.get("warnings") or []:
         lines += [warning, ""]
     if supply is None:
-        x_line = "X用の目標表記：食事目標◯kcal 朝◯g/◯g/◯g 昼◯g/◯g/◯g 夜◯g/◯g/◯g（P/F/Cの順。画像から計算した朝昼夕の値で埋める）"
+        x_lines = [
+            "X用の食事ブロック（4行。P/F/Cの順。画像から計算した朝昼夕の値で◯を埋める）：",
+            "```",
+            "食事◯kcal",
+            "朝◯/◯/◯",
+            "昼◯/◯/◯",
+            "夜◯/◯/◯",
+            "```",
+        ]
     else:
         r = plan["remaining"]
         meals = list(plan["meals"].values())
-        meal_text = " ".join(
-            f"{label}{m['p']}g/{m['f']}g/{m['c']}g" for label, m in zip(("朝", "昼", "夜"), meals)
-        )
-        x_line = f"X用の目標表記：食事目標{fmt_num(r['kcal'])}kcal {meal_text}"
+        x_lines = [
+            "X用の食事ブロック（4行。P/F/Cの順。このまま書き写す）：",
+            "```",
+            f"食事{fmt_num(r['kcal'])}kcal",
+            *(f"{label}{m['p']}/{m['f']}/{m['c']}" for label, m in zip(("朝", "昼", "夜"), meals)),
+            "```",
+        ]
     lines += [
-        x_line,
+        *x_lines,
         "",
         "### 朝昼夕（カロミル入力用）",
         "|区分|P(g)|F(g)|C(g)|kcal|",
@@ -2389,7 +2400,7 @@ def build_chatgpt_prompt() -> str:
         "9. 追加で必要な情報\n"
         "10. 今日の栄養（「今日の栄養（ツール計算済み）」の表をそのまま転記し、食べ方の例と明日に向けた炭水化物の考え方を添える）\n"
         "11. 目標進捗（目標進捗の表をもとに、目標までの距離と今日のセッションの位置づけを2〜3行で）\n"
-        "12. X投稿用まとめ（回答の最後に置く。コピーしやすいようコードブロックで囲む。1行目は必ず「🐣S級コーチフィードバック🐣」。この1行目と改行も含めて全体で135文字以内（Xの140文字上限に対して余裕を持たせるため）。今日のセッションの評価と次回への一言を、本人の自己分析に応える形で書く。最後の行は必ず「今日の栄養」の「X用の目標表記」をそのまま書く（文字数に含める）。最後に（◯文字）と文字数をコードブロックの外に書く）\n\n"
+        "12. X投稿用まとめ（回答の最後に置く。コピーしやすいようコードブロックで囲む。構成は「1行目：🐣S級フィードバック🐣」「空行」「本文」「空行」「食事ブロック4行」。食事ブロックは「今日の栄養」の「X用の食事ブロック」を改行も含めてそのまま書き写す。改行も含めて全体で135文字以内（Xの140文字上限に対して余裕を持たせるため）。本文は今日のセッションの評価と次回への一言を、本人の自己分析に応える形で短く書く。最後に（◯文字）と文字数をコードブロックの外に書く）\n\n"
         "主要区間表には、区間ID、時間、mean/weighted power、HR、cadence/speed、EF/デカップリング、W′、pedaling dynamics有無を、利用可能な範囲で入れてください。"
     )
 
