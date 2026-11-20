@@ -88,7 +88,9 @@ def compute_targets(
             floor_applied = True
     pre_hard_floor = None
     if tomorrow_category == "高強度" and body_mass_kg:
-        pre_hard_floor = math.ceil(C_PER_KG_BEFORE_HARD * body_mass_kg)
+        pre_hard_floor = math.ceil(C_PER_KG_BEFORE_HARD * body_mass_kg) + (
+            C_FLOOR_OUTING_BONUS_G if day_type == "外出" else 0
+        )
         if carbs < pre_hard_floor:
             carbs = pre_hard_floor
             floor_applied = True

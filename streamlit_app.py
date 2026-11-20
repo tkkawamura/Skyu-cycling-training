@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-21-claude-nutrition-v56"
+APP_VERSION = "2026-11-21-claude-nutrition-v57"
 
 FUELING_SETS = {
     "高強度": (
@@ -482,7 +482,7 @@ def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any])
             tom=manual.get("tomorrow_plan") or "未選択（中強度の配分）",
             share=share_text,
             floor=(
-                f"（高強度前日のC下限 5.5g/kg＝{t['pre_hard_floor']}gを適用）"
+                f"（高強度前日のC下限 5.5g/kg{'＋外出50g' if t.get('life_kcal') == 1950 else ''}＝{t['pre_hard_floor']}gを適用）"
                 if t.get("pre_hard_floor") and t["c"] == t["pre_hard_floor"]
                 else "（Cは下限値を適用）" if t.get("c_floor_applied") else ""
             ),
