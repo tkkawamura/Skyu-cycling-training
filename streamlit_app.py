@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-18-claude-nutrition-v55"
+APP_VERSION = "2026-11-21-claude-nutrition-v56"
 
 FUELING_SETS = {
     "高強度": (
@@ -1785,6 +1785,15 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"|W′bal|{display_wbal(metrics)}|",
         f"|最大心拍|{display(metrics.get('max_heart_rate'), 'bpm')}|",
         f"|基準|{display(metrics.get('condition_baseline'))} / {display(metrics.get('condition_baseline_date'))}|",
+        *(
+            [
+                "",
+                f"**今日はアクティビティなし（レスト日）**。上のフィットネス・ファティーグ・フォームは今日（{display(metrics.get('condition_baseline_date'))}）の朝のIntervals.icuの値です。",
+                f"以下の「最新ライド」「FIT解析」は前回（{display(metrics.get('latest_activity_date'))}）のライドで、今日のセッションではありません。",
+            ]
+            if metrics.get("rest_day")
+            else []
+        ),
         "",
         *markdown_baselines(metrics, (context.get("nutrition_plan") or {}).get("baselines")),
         "## コンディション解釈基準",
@@ -2365,6 +2374,7 @@ def build_chatgpt_prompt() -> str:
         "Intervals.icuのフィットネス、ファティーグ、フォームは、アクティビティ値または当日ライド後値とTSSから差し戻したライド直前推定値です。\n"
         "自己分析は本人の主観情報です。データと照らし合わせ、感覚とデータが一致している点・ズレている点を指摘してください。\n\n"
         "読み取りルール:\n"
+        "- 「今日はアクティビティなし（レスト日）」と書かれている日は、今日の回復状態の評価を中心にしてください。コンディション値（フィットネス・ファティーグ・フォーム）は今日の朝の値を使い、前回のライドの時点の値と混同しないでください。前回のライドの詳細評価は繰り返さず、必要なら1〜2行の振り返りにとどめてください。\n"
         "- 「明日のトレーニング」が「未定（低強度かレスト）」の日は、今日の疲労やコンディションから、明日は低強度で乗るかレストにするかを提案してください。「低強度（90分以内）」「レスト」と決まっている日は、その予定を前提に次回提案を書いてください。\n"
         "- 当日にライドがなく、ランのアクティビティを評価対象にしている場合（最新ライドの種目がRunなど）は、ランとして評価してください。CP・W′・ケイデンス基準などサイクリング前提の指標は使わず、時間・距離・ペース・心拍・負荷を中心にしてください。\n"
         "- データ内にない事実は推測で補わないでください。\n"

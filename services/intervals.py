@@ -6,7 +6,7 @@ import io
 import os
 import re
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -464,7 +464,30 @@ class IntervalsClient:
         condition_baseline = "activity_value"
         if activity_fitness is None and activity_fatigue is None:
             condition_baseline = "estimated_pre_ride_from_same_day_wellness_and_tss" if estimated_pre_ride else ("same_day_wellness" if same_day_wellness else "latest_available")
+
+        # Rest day: no activity today, so use this morning's wellness values
+        # instead of the condition at the time of the last ride.
+        today = datetime.now(timezone(timedelta(hours=9))).date()
+        latest_activity_date = parse_date(latest_activity.get("date"))
+        rest_day = latest_activity_date is not None and latest_activity_date < today
+        if rest_day:
+            today_wellness = {}
+            for row in sorted(wellness, key=lambda item: str(first_value(item, "id", "date") or "")):
+                row_date = parse_date(first_value(row, "id", "date"))
+                if row_date and row_date <= today:
+                    today_wellness = row
+            today_fitness = number(first_value(today_wellness, "ctl", "fitness", "icu_ctl"))
+            today_fatigue = number(first_value(today_wellness, "atl", "fatigue", "icu_atl"))
+            if today_fitness is not None and today_fatigue is not None:
+                fitness, fatigue = today_fitness, today_fatigue
+                today_form = number(first_value(today_wellness, "form", "tsb", "icu_tsb", "freshness"))
+                form = today_form if today_form is not None else round(today_fitness - today_fatigue, 2)
+                form_source = "intervals_native" if today_form is not None else "computed_fitness_minus_fatigue"
+                condition_baseline = "rest_day_today_wellness"
+                baseline_wellness = today_wellness
         return {
+            "rest_day": rest_day,
+            "latest_activity_date": latest_activity_date.isoformat() if latest_activity_date else None,
             "date": first_value(latest_wellness, "id", "date") or latest_activity.get("date"),
             "condition_baseline": condition_baseline,
             "condition_baseline_date": first_value(baseline_wellness, "id", "date"),
