@@ -22,11 +22,12 @@ from services.nutrition import compute_day_plan
 from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 from services import weekly_review
 from services import strava
+from services import discord
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-26-claude-strava-v61"
+APP_VERSION = "2026-11-26-claude-discord-v62"
 
 FUELING_SETS = {
     "高強度": (
@@ -171,6 +172,7 @@ def main() -> None:
             )
         context["daily_log"] = dict(zip(("ok", "text"), write_daily_log(context)))
         context["strava_log"] = dict(zip(("ok", "text"), write_strava_note(context)))
+        context["discord_log"] = dict(zip(("ok", "text"), post_discord_note(context)))
         render_context(context)
 
 
@@ -436,6 +438,18 @@ def write_strava_note(context: dict[str, Any]) -> tuple[bool, str]:
     if not written:
         return False, "今日のStravaのアクティビティが見つからなかったため、書き込みませんでした"
     return True, "、".join(written)
+
+
+def post_discord_note(context: dict[str, Any]) -> tuple[bool, str]:
+    webhook_url = str(secret_or_env("DISCORD_WEBHOOK_URL", "") or "")
+    note = (context.get("manual_inputs") or {}).get("subjective_note")
+    if not webhook_url or not note:
+        return False, ""
+    try:
+        discord.post_note(webhook_url, str(secret_or_env("DISCORD_THREAD_ID", "") or "") or None, note)
+    except Exception as exc:
+        return False, str(exc)
+    return True, ""
 
 
 def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
@@ -1147,6 +1161,11 @@ def render_context(context: dict[str, Any]) -> None:
         st.caption("Stravaに自己分析を書き込みました：" + str(strava_log.get("text")))
     elif strava_log.get("text"):
         st.warning(str(strava_log.get("text")))
+    discord_log = context.get("discord_log") or {}
+    if discord_log.get("ok"):
+        st.caption("Discordのスレッドに投稿しました")
+    elif discord_log.get("text"):
+        st.warning(str(discord_log.get("text")))
     review_lines = weekly_review.markdown_review(context.get("weekly_review"))
     if review_lines:
         st.markdown("\n".join(review_lines).replace("## ", "#### ", 1))
