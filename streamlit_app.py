@@ -20,11 +20,12 @@ from services.fit_context import AthleteInputs, FitActivityContextBuilder
 from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 from services.nutrition import compute_day_plan
 from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
+from services import weekly_review
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-25-claude-balance-v58"
+APP_VERSION = "2026-11-25-claude-weekly-v59"
 
 FUELING_SETS = {
     "高強度": (
@@ -165,6 +166,7 @@ def main() -> None:
                 intervals_snapshot=intervals_snapshot,
                 include_prompt=True,
             )
+        context["daily_log"] = dict(zip(("ok", "text"), write_daily_log(context)))
         render_context(context)
 
 
@@ -297,6 +299,7 @@ def generate_context(
     }
     compact_fit_context = build_compact_fit_context(fit_context)
     same_day_rides = build_same_day_rides(intervals_payload, compact_fit_context)
+    nutrition_plan = build_nutrition_plan(manual_inputs, same_day_rides, intervals_payload.get("trend"), metrics.get("weight"))
     output = {
         "schema_version": "cycling_training_review_context.v2",
         "meta": {
@@ -322,7 +325,12 @@ def generate_context(
         "manual_inputs": manual_inputs,
         "intervals_icu": intervals_context,
         "same_day_rides": same_day_rides,
-        "nutrition_plan": build_nutrition_plan(manual_inputs, same_day_rides, intervals_payload.get("trend"), metrics.get("weight")),
+        "nutrition_plan": nutrition_plan,
+        "weekly_review": build_weekly_review(intervals_payload, nutrition_plan),
+        "today_wellness_comment": next(
+            (row.get("comments") for row in (intervals_payload.get("trend") or []) if str(row.get("date"))[:10] == (nutrition_plan or {}).get("today_jst")),
+            None,
+        ),
         "llm_review_summary": build_review_summary(intervals_context, compact_fit_context, manual_inputs),
         "fit_activity_context": compact_fit_context,
         "uploaded_json_context": uploaded_json_context if uploaded_json_context and fit_context is None else None,
@@ -332,6 +340,51 @@ def generate_context(
         },
     }
     return output
+
+
+def build_weekly_review(intervals_payload: dict[str, Any], plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    mode = (plan or {}).get("mode") or {}
+    phase = mode.get("phase") or {}
+    try:
+        return weekly_review.build_review(
+            intervals_payload.get("trend"),
+            intervals_payload.get("recent_activities"),
+            today,
+            phase.get("weight_avg") or to_float((intervals_payload.get("metrics") or {}).get("weight")),
+            phase,
+            force=bool(secret_or_env("WEEKLY_REVIEW_ALWAYS", "")),
+        )
+    except Exception:
+        return None
+
+
+def write_daily_log(context: dict[str, Any]) -> tuple[bool, str]:
+    """Save today's inputs and balance to the Intervals.icu wellness comment."""
+    plan = context.get("nutrition_plan")
+    manual = context.get("manual_inputs") or {}
+    if not plan or not secret_or_env("INTERVALS_API_KEY", ""):
+        return False, "記録なし（APIキー未設定）"
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    existing = context.get("today_wellness_comment")
+    if not weekly_review.can_overwrite(existing):
+        return False, "Intervals.icuのコメント欄に別の内容があるため、記録しませんでした"
+    line = weekly_review.daily_log_line(plan, manual.get("day_type_key") or "デスクワーク", manual.get("tomorrow_plan"))
+    client = IntervalsClient(
+        IntervalsConfig(
+            api_key=secret_or_env("INTERVALS_API_KEY", ""),
+            athlete_id=str(secret_or_env("INTERVALS_ATHLETE_ID", "0")),
+            base_url=secret_or_env("INTERVALS_BASE_URL", "https://intervals.icu"),
+            data_dir="data",
+            download_fit=False,
+            request_timeout_s=int_setting("INTERVALS_REQUEST_TIMEOUT_S", 8),
+        )
+    )
+    try:
+        client.update_wellness(today, {"comments": line})
+    except Exception as exc:
+        return False, f"Intervals.icuへの記録に失敗：{exc}"
+    return True, line
 
 
 def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
@@ -1033,6 +1086,14 @@ def render_context(context: dict[str, Any]) -> None:
     paste_text = build_paste_text(context)
 
     render_copy_box(paste_text)
+    log = context.get("daily_log") or {}
+    if log.get("ok"):
+        st.caption("Intervals.icuのコメント欄に記録しました：" + str(log.get("text")).removeprefix(weekly_review.LOG_PREFIX).strip())
+    elif log:
+        st.warning(str(log.get("text")))
+    review_lines = weekly_review.markdown_review(context.get("weekly_review"))
+    if review_lines:
+        st.markdown("\n".join(review_lines).replace("## ", "#### ", 1))
 
     render_metrics(metrics)
 
@@ -1784,6 +1845,7 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         f"- 今日の活動: {display(manual.get('day_type'))}",
         "",
         "## 今日の栄養（ツール計算済み・数値も形式もこのまま転記）",
+        *weekly_review.markdown_review(context.get("weekly_review")),
         *markdown_nutrition_plan(context.get("nutrition_plan"), manual),
         "",
         "## 目標進捗",
@@ -2400,6 +2462,7 @@ def build_chatgpt_prompt() -> str:
         "- 安静時心拍は39 bpm前後をシーズンベスト級、40〜43 bpmを良好な状態として解釈してください。\n"
         "- HRVと安静時心拍の28日平均は「直近28日平均との比較」の表にあります。この表を使って比較してください。\n"
         "- HRVは本人の直近28日平均を基準に解釈してください。平均より15%以上低い日は疲労のサインです（ツールの維持判定と同じ基準）。「今日の方針」が維持になっている日は、その理由と矛盾する評価をしないでください。\n"
+        "- 「📊 週次レビュー」がある日（月曜）は、フィードバックの最後に2〜3行でコメントしてください（体重の推移と収支の予測が合っているか、提案が妥当か）。提案を採用するかは本人が決めるので、赤字の値を自分で変えて計算しないでください。X要約には入れないでください。\n"
         "- 「実際の収支」が黒字の日は、炭水化物の下限による計画どおりの食べ増しです。食べ過ぎとは評価しないでください。\n"
         "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
         "- サイクリングダイナミクスは、Power Phase、Peak Power Phase、Platform Center Offset、左右バランス、Torque Effectiveness、Pedal Smoothnessの値がある場合だけ評価してください。\n"

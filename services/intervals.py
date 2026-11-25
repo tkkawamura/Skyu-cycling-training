@@ -140,6 +140,9 @@ class IntervalsClient:
             return data.get("wellness") or data.get("items") or []
         return []
 
+    def update_wellness(self, day: date, fields: dict[str, Any]) -> None:
+        self._request("PUT", f"/api/v1/athlete/{self.athlete_id}/wellness/{day.isoformat()}", json=fields)
+
     def get_activities(self, oldest: date, newest: date) -> list[dict[str, Any]]:
         try:
             data = self._get_json(
@@ -575,6 +578,7 @@ class IntervalsClient:
                     "w_prime_balance": number(first_value(row, *W_PRIME_BALANCE_KEYS)),
                     "w_prime_balance_drop": number(first_value(row, *W_PRIME_DROP_KEYS)),
                     "training_load": load_by_date.get(row_date, 0),
+                    "comments": first_value(row, "comments"),
                 }
             )
         return sorted([item for item in trend if item.get("date")], key=lambda item: item["date"])
