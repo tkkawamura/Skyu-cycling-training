@@ -24,7 +24,7 @@ from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 
 load_dotenv()
 
-APP_VERSION = "2026-11-21-claude-nutrition-v57"
+APP_VERSION = "2026-11-25-claude-balance-v58"
 
 FUELING_SETS = {
     "高強度": (
@@ -425,13 +425,32 @@ def markdown_goal_mode(plan: dict[str, Any]) -> list[str]:
         deficit_text = "赤字0（明日が高強度・FTPテスト・レースのため）"
     else:
         deficit_text = f"赤字{t['deficit']}kcal（減量）"
+    balance_line = actual_balance_line(t)
     return [
         "### 今日の目標設定",
         f"- 体重目標：{stages}（最終は175cm・60kgと同じBMI19.6）",
         f"- 現在：7日平均{weight_text} ／ {phase_text}",
         f"- 今日の方針：{deficit_text}",
+        *([balance_line] if balance_line else []),
         f"- 今日のターゲット：{fmt_num(t['kcal'])}kcal / P{t['p']}g / F{t['f']}g / C{t['c']}g（トレーニング補給込み）",
     ]
+
+
+def actual_balance_line(t: dict[str, Any]) -> str | None:
+    """Show the real balance when the carb floor pushes the target above the planned deficit."""
+    used = (t.get("life_kcal") or 0) + (t.get("ride_kj") or 0)
+    balance = round(t["kcal"] - used)
+    planned = -int(t.get("deficit") or 0)
+    if abs(balance - planned) < 10:
+        return None
+    if t.get("pre_hard_floor") and t["c"] == t["pre_hard_floor"]:
+        reason = f"明日に向けてC {t['pre_hard_floor']}g（5.5g/kg）で食べ増し"
+    elif t.get("c_floor_applied"):
+        reason = f"C下限{t['c']}gで食べ増し"
+    else:
+        reason = "脂質・炭水化物の下限で調整"
+    sign = "黒字" if balance > 0 else "赤字"
+    return f"  - → 実際の収支：{sign}{balance:+,d}kcal（{reason}・計画どおり）"
 
 
 def fueling_basis_line(manual: dict[str, Any]) -> str:
@@ -2381,6 +2400,7 @@ def build_chatgpt_prompt() -> str:
         "- 安静時心拍は39 bpm前後をシーズンベスト級、40〜43 bpmを良好な状態として解釈してください。\n"
         "- HRVと安静時心拍の28日平均は「直近28日平均との比較」の表にあります。この表を使って比較してください。\n"
         "- HRVは本人の直近28日平均を基準に解釈してください。平均より15%以上低い日は疲労のサインです（ツールの維持判定と同じ基準）。「今日の方針」が維持になっている日は、その理由と矛盾する評価をしないでください。\n"
+        "- 「実際の収支」が黒字の日は、炭水化物の下限による計画どおりの食べ増しです。食べ過ぎとは評価しないでください。\n"
         "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
         "- サイクリングダイナミクスは、Power Phase、Peak Power Phase、Platform Center Offset、左右バランス、Torque Effectiveness、Pedal Smoothnessの値がある場合だけ評価してください。\n"
         "- サイクリングダイナミクス診断でmissingの項目は、推測せず「FITに未収録または未検出」と扱ってください。\n"
