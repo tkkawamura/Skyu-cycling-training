@@ -21,11 +21,12 @@ from services.intervals import IntervalsClient, IntervalsConfig, IntervalsError
 from services.nutrition import compute_day_plan
 from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 from services import weekly_review
+from services import strava
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-25-claude-tomorrow3-v60"
+APP_VERSION = "2026-11-26-claude-strava-v61"
 
 FUELING_SETS = {
     "高強度": (
@@ -103,6 +104,8 @@ def main() -> None:
     st.markdown(f'<h1 class="app-title">{icon_img_tag()}<span>S級コーチ</span></h1>', unsafe_allow_html=True)
     st.caption(f"アプリ版: {APP_VERSION}")
 
+    render_strava_setup()
+
     lookback_days = max(LONG_HISTORY_DAYS, int_setting("LOOKBACK_DAYS", LONG_HISTORY_DAYS))
     intervals_snapshot = load_intervals_snapshot(lookback_days)
     render_startup_intervals_snapshot(intervals_snapshot)
@@ -167,6 +170,7 @@ def main() -> None:
                 include_prompt=True,
             )
         context["daily_log"] = dict(zip(("ok", "text"), write_daily_log(context)))
+        context["strava_log"] = dict(zip(("ok", "text"), write_strava_note(context)))
         render_context(context)
 
 
@@ -385,6 +389,53 @@ def write_daily_log(context: dict[str, Any]) -> tuple[bool, str]:
     except Exception as exc:
         return False, f"Intervals.icuへの記録に失敗：{exc}"
     return True, line
+
+
+STRAVA_REDIRECT_URI = "https://skyu-cycling-training.streamlit.app"
+
+
+def strava_keys() -> tuple[str, str, str]:
+    return (
+        str(secret_or_env("STRAVA_CLIENT_ID", "") or ""),
+        str(secret_or_env("STRAVA_CLIENT_SECRET", "") or ""),
+        str(secret_or_env("STRAVA_REFRESH_TOKEN", "") or ""),
+    )
+
+
+def render_strava_setup() -> None:
+    """One-time Strava connection: show the approve link, then the refresh token to paste into secrets."""
+    client_id, client_secret, refresh_token = strava_keys()
+    if not client_id or not client_secret:
+        return
+    code = st.query_params.get("code")
+    if code and "activity:write" in str(st.query_params.get("scope", "")):
+        try:
+            token = strava.exchange_code(client_id, client_secret, str(code))
+        except Exception as exc:
+            st.error(str(exc))
+            return
+        st.success("Stravaと連携できました。下の1行をStreamlitのSecretsに貼って、Reboot appしてください。")
+        st.code(f'STRAVA_REFRESH_TOKEN = "{token.get("refresh_token")}"', language="toml")
+        st.stop()
+    elif code:
+        st.error("「アクティビティの書き込み」にチェックを入れて、もう一度連携してください。")
+    if not refresh_token:
+        st.link_button("Stravaと連携（最初の1回だけ）", strava.authorize_url(client_id, STRAVA_REDIRECT_URI), use_container_width=True)
+
+
+def write_strava_note(context: dict[str, Any]) -> tuple[bool, str]:
+    client_id, client_secret, refresh_token = strava_keys()
+    note = (context.get("manual_inputs") or {}).get("subjective_note")
+    if not (client_id and client_secret and refresh_token) or not note:
+        return False, ""
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    try:
+        written = strava.write_note(client_id, client_secret, refresh_token, note, today)
+    except Exception as exc:
+        return False, str(exc)
+    if not written:
+        return False, "今日のStravaのアクティビティが見つからなかったため、書き込みませんでした"
+    return True, "、".join(written)
 
 
 def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
@@ -1091,6 +1142,11 @@ def render_context(context: dict[str, Any]) -> None:
         st.caption("Intervals.icuのコメント欄に記録しました：" + str(log.get("text")).removeprefix(weekly_review.LOG_PREFIX).strip())
     elif log:
         st.warning(str(log.get("text")))
+    strava_log = context.get("strava_log") or {}
+    if strava_log.get("ok"):
+        st.caption("Stravaに自己分析を書き込みました：" + str(strava_log.get("text")))
+    elif strava_log.get("text"):
+        st.warning(str(strava_log.get("text")))
     review_lines = weekly_review.markdown_review(context.get("weekly_review"))
     if review_lines:
         st.markdown("\n".join(review_lines).replace("## ", "#### ", 1))
