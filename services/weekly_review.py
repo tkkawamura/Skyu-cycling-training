@@ -27,7 +27,7 @@ MIN_WEIGHT_DAYS = 4
 ADJUST_KEYS = ("中強度", "低強度")
 ADJUST_LABELS = {"中強度": "Z2の日", "低強度": "低強度の日"}  # weigh-ins needed in each 7-day window
 SHORT_DAY = {"デスクワーク": "デスク", "外出": "外出"}
-OPTION_BY_CATEGORY = {"高強度": "高強度", "中強度": "2時間のZ2またはZ2上側", "低強度": "低強度（90分以内）"}
+OPTION_BY_CATEGORY = {"高強度": "高強度", "中強度": "2時間のZ2またはZ2上側", "低強度": "低強度もしくはレスト"}
 BALANCE_RE = re.compile(r"収支([+\-−]?[\d,]+)kcal")
 
 
