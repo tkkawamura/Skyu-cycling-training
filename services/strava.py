@@ -19,7 +19,6 @@ TOKEN_URL = "https://www.strava.com/oauth/token"
 AUTH_URL = "https://www.strava.com/oauth/authorize"
 SCOPE = "activity:read_all,activity:write"
 MARKER = "【自己分析】"
-TYPES = ("ride", "run")
 TIMEOUT = 10
 
 
@@ -73,7 +72,7 @@ def merge_description(current: str | None, note: str) -> str:
 
 
 def write_note(client_id: str, client_secret: str, refresh_token: str, note: str, day: date) -> list[str]:
-    """Append the note to every ride/run of `day` (JST). Returns the activity names written."""
+    """Append the note to every activity of `day` (JST). Returns the activity names written."""
     token = access_token(client_id, client_secret, refresh_token)
     headers = {"Authorization": f"Bearer {token}"}
     tz = ZoneInfo("Asia/Tokyo")
@@ -82,16 +81,13 @@ def write_note(client_id: str, client_secret: str, refresh_token: str, note: str
     response = requests.get(
         f"{API}/athlete/activities",
         headers=headers,
-        params={"after": after, "before": before, "per_page": 30},
+        params={"after": after, "before": before, "per_page": 50},
         timeout=TIMEOUT,
     )
     if response.status_code >= 400:
         raise StravaError(f"Stravaのアクティビティ取得に失敗しました（{response.status_code}）")
     written = []
     for item in response.json():
-        kind = str(item.get("sport_type") or item.get("type") or "").lower()
-        if not any(word in kind for word in TYPES):
-            continue
         detail = requests.get(f"{API}/activities/{item['id']}", headers=headers, timeout=TIMEOUT)
         if detail.status_code >= 400:
             raise StravaError(f"Stravaのアクティビティ取得に失敗しました（{detail.status_code}）")
