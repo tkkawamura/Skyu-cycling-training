@@ -26,7 +26,7 @@ from services import strava
 
 load_dotenv()
 
-APP_VERSION = "2026-11-26-claude-strava-all-v64"
+APP_VERSION = "2026-11-26-claude-strava-nohead-v65"
 
 FUELING_SETS = {
     "高強度": (

@@ -18,7 +18,8 @@ API = "https://www.strava.com/api/v3"
 TOKEN_URL = "https://www.strava.com/oauth/token"
 AUTH_URL = "https://www.strava.com/oauth/authorize"
 SCOPE = "activity:read_all,activity:write"
-MARKER = "【自己分析】"
+MARKER = "\u2063"  # invisible separator marking where our note starts
+OLD_MARKER = "【自己分析】"
 TIMEOUT = 10
 
 
@@ -65,9 +66,12 @@ def access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
 
 
 def merge_description(current: str | None, note: str) -> str:
-    """Keep the existing description and replace only our own block at the end."""
-    base = (current or "").split(MARKER)[0].rstrip()
-    block = f"{MARKER}\n{note.strip()}"
+    """Keep the existing description and replace only our own block at the end.
+
+    Our block starts with an invisible separator (U+2063) so no visible header is needed.
+    """
+    base = (current or "").split(MARKER)[0].split(OLD_MARKER)[0].rstrip()
+    block = f"{MARKER}{note.strip()}"
     return f"{base}\n\n{block}" if base else block
 
 
