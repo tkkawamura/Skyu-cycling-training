@@ -22,11 +22,12 @@ from services.nutrition import compute_day_plan
 from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 from services import weekly_review
 from services import strava
+from services import insights
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-27-claude-chart-v66"
+APP_VERSION = "2026-11-27-claude-report7-v67"
 
 FUELING_SETS = {
     "高強度": (
@@ -48,6 +49,7 @@ DAY_TYPES = {
 }
 GOAL_LABEL = "富士ヒル70分 → 最終65分（54.6kg時）"
 TARGET_FTP_W = 280
+FUJI_TARGET_MINUTES = (70, 65)
 TARGET_BODY_MASS_KG = GOAL_STAGES_KG[-1]  # final goal (BMI of 175cm/60kg at 167cm)
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
 FUELING_TOTALS = {
@@ -332,6 +334,9 @@ def generate_context(
         "nutrition_plan": nutrition_plan,
         "weekly_review": build_weekly_review(intervals_payload, nutrition_plan),
         "ride_chart": (fit_context or {}).get("chart_series") if isinstance(fit_context, dict) else None,
+        "same_menu_lines": insights.markdown_same_menu(
+            intervals_payload.get("latest_ride"), intervals_payload.get("recent_activities") or []
+        ),
         "today_wellness_comment": next(
             (row.get("comments") for row in (intervals_payload.get("trend") or []) if str(row.get("date"))[:10] == (nutrition_plan or {}).get("today_jst")),
             None,
@@ -1961,7 +1966,17 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         "",
         "## 目標進捗",
         *markdown_goal_progress(metrics, athlete_inputs),
+        *insights.markdown_fuji(
+            to_float(metrics.get("ftp")) or to_float(athlete_inputs.get("critical_power_w")),
+            to_float(metrics.get("weight")) or to_float(athlete_inputs.get("body_mass_kg")),
+            FUJI_TARGET_MINUTES,
+            TARGET_BODY_MASS_KG,
+        ),
         "",
+        *context.get("same_menu_lines", []),
+        *([""] if context.get("same_menu_lines") else []),
+        *insights.markdown_chart_data(context.get("ride_chart")),
+        *([""] if context.get("ride_chart") else []),
         "## Intervals.icu コンディション",
         "|項目|値|",
         "|---|---:|",
@@ -2578,7 +2593,7 @@ def build_chatgpt_prompt() -> str:
         "- 体重、安静時心拍、睡眠スコア、HRV、フィットネス、ファティーグ、フォーム、W′balを評価の前提に利用してください。\n"
         "- サイクリングダイナミクスは、Power Phase、Peak Power Phase、Platform Center Offset、左右バランス、Torque Effectiveness、Pedal Smoothnessの値がある場合だけ評価してください。\n"
         "- サイクリングダイナミクス診断でmissingの項目は、推測せず「FITに未収録または未検出」と扱ってください。\n"
-        "- W′bal時系列グラフは含めていないため、CP / W′セクションの最低W′bal、終了W′bal、W′消費、20%以下時間を使って評価してください。\n"
+        "- W′の評価は、CP / W′セクションの最低W′bal、終了W′bal、W′消費、20%以下時間を使ってください（「グラフ用データ」のW′bal%は1分ごとの最低値で、グラフ用の目安です）。\n"
         "- W′は設定最大値、最低W′bal、W′ドロップ、残量を比較し、高強度でどこまで掘れたか、どれだけ余ったかを評価してください。\n"
         "- 利用可能な指標と指標の有無を先に確認し、使える値だけで評価してください。\n"
         "- missing / removed / not_applicable / null / sample_count=0 の指標は使わないでください。\n"
@@ -2595,20 +2610,17 @@ def build_chatgpt_prompt() -> str:
         "- 最後に、明日のトレーニングに向けた炭水化物の考え方を1〜2行で書いてください。\n"
         "- カロミルのスクリーンショットが添付された日で、画像の値と表の補給値が違えば、その違いを指摘するだけにしてください。\n"
         "- 補給が「カロミル写真」の日だけは例外です。「⚡補給（済）」の行を画像のkcal・P・F・Cで埋め、残り＝今日の目標−補給（整数に丸め、0未満は0）を、次のルールで朝昼夕に分けてください：Pは朝・昼が残り÷3を5g単位、夕は残り／Fは朝が残り×25%を5g単位、昼が(残り−朝)÷2を5g単位、夕は残り／Cは※計算の行のC配分で朝・昼を5g単位、夕は残り／各食kcal＝P×4+F×9+C×4を10kcal単位、夕kcalは残りkcal−朝−昼。画像がない場合は推定せず、画像を求めてください。\n\n"
-        "出力順:\n"
-        "1. 結論\n"
-        "2. セッション構造\n"
-        "3. 主要区間表\n"
+        "出力順（朝の出勤前にiPhoneで流し読みする前提。上ほど大事）:\n"
+        "1. 結論（2〜3行）\n"
+        "2. 今日の栄養（「今日の栄養（ツール計算済み）」の表をそのまま転記し、食べ方の例と明日に向けた炭水化物の考え方を添える）\n"
+        "3. 次回提案\n"
         "4. 指標別評価（🟢🟡🔴の箇条書き）\n"
-        "5. 良かった点\n"
-        "6. 改善点\n"
-        "7. 次回提案\n"
-        "8. 判断できないこと\n"
-        "9. 追加で必要な情報\n"
-        "10. 今日の栄養（「今日の栄養（ツール計算済み）」の表をそのまま転記し、食べ方の例と明日に向けた炭水化物の考え方を添える）\n"
-        "11. 目標進捗（目標進捗の表をもとに、目標までの距離と今日のセッションの位置づけを2〜3行で）\n"
-        "12. X投稿用まとめ（回答の最後に置く。コピーしやすいようコードブロックで囲む。構成は必ずこの順番：「1行目：🐣S級フィードバック🐣」「空行」「食事ブロック4行」「空行」「本文」。食事ブロックは「今日の栄養」の「X用の食事ブロック」を改行も含めてそのまま書き写す。改行も含めて全体で135文字以内（Xの140文字上限に対して余裕を持たせるため）。本文は今日のセッションの評価と次回への一言を、本人の自己分析に応える形で短く書く。最後に（◯文字）と文字数をコードブロックの外に書く）\n\n"
-        "主要区間表には、区間ID、時間、mean/weighted power、HR、cadence/speed、EF/デカップリング、W′、pedaling dynamics有無を、利用可能な範囲で入れてください。"
+        "5. 良かった点・改善点（各2〜3個の箇条書き）\n"
+        "6. セッション構造と主要区間：最初にセッションの流れを1〜2行（例：アップ10分 → SST 55分 → ダウン5分）。続けて主要区間を表にせず、区間ごとに「**A1** 10〜65分（55分）」の見出し行と「232W / NP 235W（CP比0.90）｜HR 152｜EF 1.53｜Dec +6.5%｜W′残 60%」の1〜2行で書く。「グラフ用データ」がある日は、そのデータでパワー・心拍（W′balがあればそれも）の折れ線グラフを描き、主要区間を分かるようにする（グラフを描けない環境なら省略）。\n"
+        "7. 前回の同じメニューとの比較（「前回の同じメニューとの比較」の表がある日だけ。EF・デカップリング・心拍の変化から、有酸素の伸びを1〜2行で）\n"
+        "8. 目標進捗（目標進捗の表と「富士ヒル予想タイム」をもとに、目標までの距離と今日のセッションの位置づけを2〜3行で。予想タイムはツールの値をそのまま使い、再計算しない）\n"
+        "9. 判断できないこと・追加で必要な情報（1つにまとめ、特になければこの項目ごと省略）\n"
+        "10. X投稿用まとめ（回答の最後に置く。コピーしやすいようコードブロックで囲む。構成は必ずこの順番：「1行目：🐣S級フィードバック🐣」「空行」「食事ブロック4行」「空行」「本文」。食事ブロックは「今日の栄養」の「X用の食事ブロック」を改行も含めてそのまま書き写す。改行も含めて全体で135文字以内（Xの140文字上限に対して余裕を持たせるため）。本文は今日のセッションの評価と次回への一言を、本人の自己分析に応える形で短く書く。最後に（◯文字）と文字数をコードブロックの外に書く）\n\n"
     )
 
 
