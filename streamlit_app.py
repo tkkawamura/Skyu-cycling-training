@@ -23,11 +23,12 @@ from services.goal_phase import GOAL_STAGES_KG, condition_baselines, decide_mode
 from services import weekly_review
 from services import strava
 from services import insights
+from services import github_log
 
 
 load_dotenv()
 
-APP_VERSION = "2026-11-27-claude-zwiftchart-v70"
+APP_VERSION = "2026-11-28-claude-ghlog-v71"
 
 FUELING_SETS = {
     "高強度": (
@@ -173,6 +174,7 @@ def main() -> None:
             )
         context["strava_log"] = dict(zip(("ok", "text"), write_strava_note(context)))
         context["daily_log"] = dict(zip(("ok", "text"), write_daily_log(context)))
+        context["github_log"] = dict(zip(("ok", "text"), save_github_report(context)))
         render_context(context)
 
 
@@ -452,6 +454,20 @@ def write_strava_note(context: dict[str, Any]) -> tuple[bool, str]:
     if done or ids:
         return True, "今日の分は書き込み済みのため、スキップしました"
     return False, "今日のStravaのアクティビティが見つからなかったため、書き込みませんでした"
+
+
+def save_github_report(context: dict[str, Any]) -> tuple[bool, str]:
+    token = str(secret_or_env("GITHUB_TOKEN", "") or "")
+    if not token:
+        return False, ""
+    repo = str(secret_or_env("GITHUB_REPO", "tkkawamura/Skyu-cycling-training") or "tkkawamura/Skyu-cycling-training")
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    text = f"# {build_paste_title(context)}\n\n{build_review_markdown(context)}\n"
+    try:
+        path = github_log.save_report(token, repo, today, text)
+    except Exception as exc:
+        return False, str(exc)
+    return True, path
 
 
 def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
@@ -1171,6 +1187,11 @@ def render_context(context: dict[str, Any]) -> None:
         st.caption("Intervals.icuのコメント欄に記録しました：" + str(log.get("text")).removeprefix(weekly_review.LOG_PREFIX).strip())
     elif log:
         st.warning(str(log.get("text")))
+    github_log_result = context.get("github_log") or {}
+    if github_log_result.get("ok"):
+        st.caption("日報をGitHubに保存しました：" + str(github_log_result.get("text")))
+    elif github_log_result.get("text"):
+        st.warning(str(github_log_result.get("text")))
     strava_log = context.get("strava_log") or {}
     if strava_log.get("ok"):
         text = str(strava_log.get("text"))
