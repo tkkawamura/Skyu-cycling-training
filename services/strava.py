@@ -75,8 +75,19 @@ def merge_description(current: str | None, note: str) -> str:
     return f"{base}\n\n{block}" if base else block
 
 
-def write_note(client_id: str, client_secret: str, refresh_token: str, note: str, day: date) -> list[str]:
-    """Append the note to every activity of `day` (JST). Returns the activity names written."""
+def write_note(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    note: str,
+    day: date,
+    skip_ids: set[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Append the note once to every activity of `day` (JST).
+
+    Activities in `skip_ids` (already written earlier today) or whose description
+    already contains the note are left alone. Returns (written names, written ids).
+    """
     token = access_token(client_id, client_secret, refresh_token)
     headers = {"Authorization": f"Bearer {token}"}
     tz = ZoneInfo("Asia/Tokyo")
@@ -90,16 +101,24 @@ def write_note(client_id: str, client_secret: str, refresh_token: str, note: str
     )
     if response.status_code >= 400:
         raise StravaError(f"Stravaのアクティビティ取得に失敗しました（{response.status_code}）")
-    written = []
+    names, ids = [], []
     for item in response.json():
-        detail = requests.get(f"{API}/activities/{item['id']}", headers=headers, timeout=TIMEOUT)
+        activity_id = str(item["id"])
+        if activity_id in (skip_ids or set()):
+            continue
+        detail = requests.get(f"{API}/activities/{activity_id}", headers=headers, timeout=TIMEOUT)
         if detail.status_code >= 400:
             raise StravaError(f"Stravaのアクティビティ取得に失敗しました（{detail.status_code}）")
-        description = merge_description(detail.json().get("description"), note)
+        current = detail.json().get("description") or ""
+        if note.strip() in current:
+            ids.append(activity_id)
+            continue
+        description = merge_description(current, note)
         update = requests.put(
-            f"{API}/activities/{item['id']}", headers=headers, json={"description": description}, timeout=TIMEOUT
+            f"{API}/activities/{activity_id}", headers=headers, json={"description": description}, timeout=TIMEOUT
         )
         if update.status_code >= 400:
             raise StravaError(f"Stravaへの書き込みに失敗しました（{update.status_code}）")
-        written.append(str(item.get("name") or item["id"]))
-    return written
+        names.append(str(item.get("name") or activity_id))
+        ids.append(activity_id)
+    return names, ids

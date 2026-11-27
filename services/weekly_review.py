@@ -32,7 +32,17 @@ BALANCE_RE = re.compile(r"収支([+\-−]?[\d,]+)kcal")
 
 
 # --- Daily log ---------------------------------------------------------------
-def daily_log_line(plan: dict[str, Any], day_type: str, tomorrow_option: str | None) -> str:
+STRAVA_RE = re.compile(r"Strava=([\d,]+)")
+
+
+def strava_ids(comment: Any) -> set[str]:
+    match = STRAVA_RE.search(str(comment or ""))
+    return set(match.group(1).split(",")) if match else set()
+
+
+def daily_log_line(
+    plan: dict[str, Any], day_type: str, tomorrow_option: str | None, strava: set[str] | None = None
+) -> str:
     t = plan["targets"]
     used = round((t.get("life_kcal") or 0) + (t.get("ride_kj") or 0))
     balance = round(t["kcal"] - used)
@@ -45,6 +55,8 @@ def daily_log_line(plan: dict[str, Any], day_type: str, tomorrow_option: str | N
     ]
     if (plan.get("mode") or {}).get("maintain"):
         parts.append("維持")
+    if strava:
+        parts.append("Strava=" + ",".join(sorted(strava)))
     return " / ".join(parts)
 
 

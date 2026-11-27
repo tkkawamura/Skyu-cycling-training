@@ -27,7 +27,7 @@ from services import insights
 
 load_dotenv()
 
-APP_VERSION = "2026-11-27-claude-chartfix-v68"
+APP_VERSION = "2026-11-27-claude-strava-once-v69"
 
 FUELING_SETS = {
     "高強度": (
@@ -171,8 +171,8 @@ def main() -> None:
                 intervals_snapshot=intervals_snapshot,
                 include_prompt=True,
             )
-        context["daily_log"] = dict(zip(("ok", "text"), write_daily_log(context)))
         context["strava_log"] = dict(zip(("ok", "text"), write_strava_note(context)))
+        context["daily_log"] = dict(zip(("ok", "text"), write_daily_log(context)))
         render_context(context)
 
 
@@ -379,7 +379,10 @@ def write_daily_log(context: dict[str, Any]) -> tuple[bool, str]:
     existing = context.get("today_wellness_comment")
     if not weekly_review.can_overwrite(existing):
         return False, "Intervals.icuのコメント欄に別の内容があるため、記録しませんでした"
-    line = weekly_review.daily_log_line(plan, manual.get("day_type_key") or "デスクワーク", manual.get("tomorrow_plan"))
+    strava_done = weekly_review.strava_ids(existing) | set(context.get("strava_written_ids") or [])
+    line = weekly_review.daily_log_line(
+        plan, manual.get("day_type_key") or "デスクワーク", manual.get("tomorrow_plan"), strava_done
+    )
     client = IntervalsClient(
         IntervalsConfig(
             api_key=secret_or_env("INTERVALS_API_KEY", ""),
@@ -435,53 +438,20 @@ def write_strava_note(context: dict[str, Any]) -> tuple[bool, str]:
     if not (client_id and client_secret and refresh_token) or not note:
         return False, ""
     today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    done = weekly_review.strava_ids(context.get("today_wellness_comment"))
+    session_key = f"strava_done_{today.isoformat()}"
+    done |= set(st.session_state.get(session_key, []))
     try:
-        written = strava.write_note(client_id, client_secret, refresh_token, note, today)
+        written, ids = strava.write_note(client_id, client_secret, refresh_token, note, today, done)
     except Exception as exc:
         return False, str(exc)
-    if not written:
-        return False, "今日のStravaのアクティビティが見つからなかったため、書き込みませんでした"
-    return True, "、".join(written)
-
-
-def render_ride_chart(chart: dict[str, Any] | None) -> None:
-    """Power / HR (30s averages) with the main segments shaded, plus W'bal %."""
-    if not chart or not chart.get("points"):
-        return
-    import altair as alt
-    import pandas as pd
-
-    data = pd.DataFrame(chart["points"])
-    segments = pd.DataFrame(chart.get("segments") or [])
-    st.markdown("#### 📈 ライドのグラフ")
-    x = alt.X("min:Q", title="分")
-    layers = []
-    if not segments.empty:
-        layers.append(
-            alt.Chart(segments).mark_rect(color="#FC6719", opacity=0.12).encode(x="start:Q", x2="end:Q")
-        )
-    power = alt.Chart(data).mark_line(color="#FC6719", strokeWidth=1.5).encode(
-        x=x, y=alt.Y("power:Q", title="パワー(W)", axis=alt.Axis(titleColor="#FC6719"))
-    )
-    hr = alt.Chart(data).mark_line(color="#E5484D", strokeWidth=1.5).encode(
-        x=x, y=alt.Y("hr:Q", title="心拍(bpm)", scale=alt.Scale(zero=False), axis=alt.Axis(titleColor="#E5484D"))
-    )
-    main = alt.layer(*layers, power).resolve_scale(y="independent") if layers else power
-    combined = alt.layer(main, hr).resolve_scale(y="independent").properties(height=220)
-    st.altair_chart(combined.configure_view(strokeWidth=0), use_container_width=True)
-    if chart.get("has_wbal"):
-        wbal = alt.Chart(data).mark_area(color="#3E9BFF", opacity=0.35, line={"color": "#3E9BFF"}).encode(
-            x=x, y=alt.Y("wbal:Q", title="W′bal(%)", scale=alt.Scale(domain=[0, 100]))
-        ).properties(height=110)
-        st.altair_chart(wbal.configure_view(strokeWidth=0), use_container_width=True)
-    notes = []
-    if chart.get("decoupling_pct") is not None:
-        notes.append(f"ライド全体のデカップリング {chart['decoupling_pct']:+.1f}%")
-    for seg in chart.get("segments") or []:
-        if seg.get("decoupling") is not None:
-            notes.append(f"{seg['id']}（{seg['start']:.0f}〜{seg['end']:.0f}分）{seg['decoupling']:+.1f}%")
-    if notes:
-        st.caption("・".join(notes) + "　※プラス＝後半に心拍が上がった（悪化）。薄いオレンジは主要区間")
+    context["strava_written_ids"] = ids
+    st.session_state[session_key] = sorted(done | set(ids))
+    if written:
+        return True, "、".join(written)
+    if done or ids:
+        return True, "今日の分は書き込み済みのため、スキップしました"
+    return False, "今日のStravaのアクティビティが見つからなかったため、書き込みませんでした"
 
 
 def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
@@ -1203,13 +1173,10 @@ def render_context(context: dict[str, Any]) -> None:
         st.warning(str(log.get("text")))
     strava_log = context.get("strava_log") or {}
     if strava_log.get("ok"):
-        st.caption("Stravaに自己分析を書き込みました：" + str(strava_log.get("text")))
+        text = str(strava_log.get("text"))
+        st.caption(text if "スキップ" in text else "Stravaに自己分析を書き込みました：" + text)
     elif strava_log.get("text"):
         st.warning(str(strava_log.get("text")))
-    try:
-        render_ride_chart(context.get("ride_chart"))
-    except Exception as exc:  # a chart problem must never break the report
-        st.caption(f"グラフを表示できませんでした（{type(exc).__name__}）")
     review_lines = weekly_review.markdown_review(context.get("weekly_review"))
     if review_lines:
         st.markdown("\n".join(review_lines).replace("## ", "#### ", 1))
