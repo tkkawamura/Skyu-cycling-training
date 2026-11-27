@@ -49,6 +49,7 @@ class FitActivityContextBuilder:
         metric_presence = self._metric_presence(records, auto_segments, user_laps, duration_curves)
 
         selected = [seg for seg in auto_segments if seg.get("selected")]
+        chart = chart_series(records, w_prime_series.pop("pct_series", None), selected or auto_segments)
         llm_summary = {
             "session_summary": {
                 "duration_s": summary["duration_s"],
@@ -148,6 +149,7 @@ class FitActivityContextBuilder:
                 "auto_interval_segments": auto_segments,
                 "user_lap_segments": user_laps,
             },
+            "chart_series": chart,
             "coach_context": self._coach_context(load, auto_segments),
             "method_notes": [
                 {"module": "stream_processing"},
@@ -557,6 +559,7 @@ class FitActivityContextBuilder:
         total_recovery = 0.0
         below_20 = 0
         tau_s = 546.0
+        series: list[float] = []
         for power in powers:
             if power > cp:
                 delta = (power - cp) / 1000.0
@@ -569,8 +572,10 @@ class FitActivityContextBuilder:
             min_balance = min(min_balance, balance)
             if balance <= float(w_prime_kj) * 0.2:
                 below_20 += 1
+            series.append(balance / float(w_prime_kj) * 100)
 
         return {
+            "pct_series": series,
             "method": "critical_power_w_prime_balance_preliminary_exponential_recovery",
             "summary": {
                 "capacity_kj": round_or_none(w_prime_kj, 1),
@@ -953,7 +958,8 @@ def decoupling(records: list[dict[str, Any]]) -> float | None:
     second = efficiency(records[mid:])
     if not first or not second:
         return None
-    return round_or_none((second - first) / first * 100, 2)
+    # Pa:HR decoupling: positive = heart rate drifted up relative to power in the second half (worse).
+    return round_or_none((first - second) / first * 100, 2)
 
 
 def efficiency(records: list[dict[str, Any]]) -> float | None:
@@ -1037,3 +1043,53 @@ def round_or_none(value: Any, digits: int) -> Any:
         return None
     rounded = round(float(value), digits)
     return int(rounded) if digits == 0 else rounded
+
+
+def chart_series(
+    records: list[dict[str, Any]],
+    wbal_pct: list[float] | None,
+    segments: list[dict[str, Any]],
+    bin_s: int = 30,
+) -> dict[str, Any]:
+    """30-second averages of power / HR (and W'bal %) for the app's ride chart."""
+    bins: dict[int, dict[str, list[float]]] = {}
+    power_index = 0
+    for row in records:
+        key = int(row["elapsed_s"] // bin_s)
+        bucket = bins.setdefault(key, {"power": [], "hr": [], "wbal": []})
+        if row.get("power") is not None:
+            bucket["power"].append(float(row["power"]))
+            if wbal_pct and power_index < len(wbal_pct):
+                bucket["wbal"].append(wbal_pct[power_index])
+            power_index += 1
+        if row.get("heart_rate") is not None:
+            bucket["hr"].append(float(row["heart_rate"]))
+    points = []
+    for key in sorted(bins):
+        bucket = bins[key]
+        points.append(
+            {
+                "min": round(key * bin_s / 60, 2),
+                "power": round(mean(bucket["power"]), 0) if bucket["power"] else None,
+                "hr": round(mean(bucket["hr"]), 0) if bucket["hr"] else None,
+                "wbal": round(min(bucket["wbal"]), 1) if bucket["wbal"] else None,
+            }
+        )
+    marks = []
+    for seg in segments[:8]:
+        if seg.get("start_s") is None or seg.get("end_s") is None:
+            continue
+        marks.append(
+            {
+                "id": seg.get("segment_id"),
+                "start": round(seg["start_s"] / 60, 2),
+                "end": round(seg["end_s"] / 60, 2),
+                "decoupling": (seg.get("heart_rate") or {}).get("decoupling_pct"),
+            }
+        )
+    return {
+        "points": points,
+        "segments": marks,
+        "decoupling_pct": decoupling(records),
+        "has_wbal": any(p["wbal"] is not None for p in points),
+    }

@@ -26,7 +26,7 @@ from services import strava
 
 load_dotenv()
 
-APP_VERSION = "2026-11-26-claude-strava-nohead-v65"
+APP_VERSION = "2026-11-27-claude-chart-v66"
 
 FUELING_SETS = {
     "高強度": (
@@ -46,7 +46,7 @@ DAY_TYPES = {
     "デスクワーク": "デスクワーク日（約3,000歩、生活分1,750kcal）",
     "外出": "外出日（約10,000歩、生活分1,950kcal、炭水化物+50g）",
 }
-GOAL_LABEL = "富士ヒル75分 → 最終65分（54.6kg時）"
+GOAL_LABEL = "富士ヒル70分 → 最終65分（54.6kg時）"
 TARGET_FTP_W = 280
 TARGET_BODY_MASS_KG = GOAL_STAGES_KG[-1]  # final goal (BMI of 175cm/60kg at 167cm)
 CLAUDE_OPEN_URL = "https://claude.ai/project/01a1be12-a82b-7506-88ba-98ac98b62d43"
@@ -331,6 +331,7 @@ def generate_context(
         "same_day_rides": same_day_rides,
         "nutrition_plan": nutrition_plan,
         "weekly_review": build_weekly_review(intervals_payload, nutrition_plan),
+        "ride_chart": (fit_context or {}).get("chart_series") if isinstance(fit_context, dict) else None,
         "today_wellness_comment": next(
             (row.get("comments") for row in (intervals_payload.get("trend") or []) if str(row.get("date"))[:10] == (nutrition_plan or {}).get("today_jst")),
             None,
@@ -438,6 +439,46 @@ def write_strava_note(context: dict[str, Any]) -> tuple[bool, str]:
     return True, "、".join(written)
 
 
+def render_ride_chart(chart: dict[str, Any] | None) -> None:
+    """Power / HR (30s averages) with the main segments shaded, plus W'bal %."""
+    if not chart or not chart.get("points"):
+        return
+    import altair as alt
+    import pandas as pd
+
+    data = pd.DataFrame(chart["points"])
+    segments = pd.DataFrame(chart.get("segments") or [])
+    st.markdown("#### 📈 ライドのグラフ")
+    x = alt.X("min:Q", title="分")
+    layers = []
+    if not segments.empty:
+        layers.append(
+            alt.Chart(segments).mark_rect(color="#FC6719", opacity=0.12).encode(x="start:Q", x2="end:Q")
+        )
+    power = alt.Chart(data).mark_line(color="#FC6719", strokeWidth=1.5).encode(
+        x=x, y=alt.Y("power:Q", title="パワー(W)", axis=alt.Axis(titleColor="#FC6719"))
+    )
+    hr = alt.Chart(data).mark_line(color="#E5484D", strokeWidth=1.5).encode(
+        x=x, y=alt.Y("hr:Q", title="心拍(bpm)", scale=alt.Scale(zero=False), axis=alt.Axis(titleColor="#E5484D"))
+    )
+    main = alt.layer(*layers, power).resolve_scale(y="independent") if layers else power
+    combined = alt.layer(main, hr).resolve_scale(y="independent").properties(height=220)
+    st.altair_chart(combined.configure_view(strokeWidth=0), use_container_width=True)
+    if chart.get("has_wbal"):
+        wbal = alt.Chart(data).mark_area(color="#3E9BFF", opacity=0.35, line={"color": "#3E9BFF"}).encode(
+            x=x, y=alt.Y("wbal:Q", title="W′bal(%)", scale=alt.Scale(domain=[0, 100]))
+        ).properties(height=110)
+        st.altair_chart(wbal.configure_view(strokeWidth=0), use_container_width=True)
+    notes = []
+    if chart.get("decoupling_pct") is not None:
+        notes.append(f"ライド全体のデカップリング {chart['decoupling_pct']:+.1f}%")
+    for seg in chart.get("segments") or []:
+        if seg.get("decoupling") is not None:
+            notes.append(f"{seg['id']}（{seg['start']:.0f}〜{seg['end']:.0f}分）{seg['decoupling']:+.1f}%")
+    if notes:
+        st.caption("・".join(notes) + "　※プラス＝後半に心拍が上がった（悪化）。薄いオレンジは主要区間")
+
+
 def confirmed_supply(manual: dict[str, Any]) -> dict[str, float] | None:
     option = manual.get("fueling_set")
     if option == FUELING_PHOTO:
@@ -534,10 +575,20 @@ def markdown_goal_mode(plan: dict[str, Any]) -> list[str]:
         "### 今日の目標設定",
         f"- 体重目標：{stages}（最終は175cm・60kgと同じBMI19.6）",
         f"- 現在：7日平均{weight_text} ／ {phase_text}",
-        f"- 今日の方針：{deficit_text}",
+        f"- 今日の方針：{policy_badge(mode, t, plan)}{deficit_text}",
         *([balance_line] if balance_line else []),
         f"- 今日のターゲット：{fmt_num(t['kcal'])}kcal / P{t['p']}g / F{t['f']}g / C{t['c']}g（トレーニング補給込み）",
     ]
+
+
+def policy_badge(mode: dict[str, Any], t: dict[str, Any], plan: dict[str, Any]) -> str:
+    """🔵 cutting / 🟢 maintenance / 🟠 eating up for tomorrow."""
+    used = (t.get("life_kcal") or 0) + (t.get("ride_kj") or 0)
+    if t["kcal"] - used >= 10:
+        return "🟠"
+    if mode.get("maintain") or t["deficit"] == 0:
+        return "🟢"
+    return "🔵"
 
 
 def actual_balance_line(t: dict[str, Any]) -> str | None:
@@ -576,6 +627,9 @@ def fueling_basis_line(manual: dict[str, Any]) -> str:
     return f"※トレーニング補給：{text}"
 
 
+MEAL_ICONS = {"朝（ライド後）": "🌅", "朝": "🌅", "昼": "☀️", "夕": "🌙"}
+
+
 def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any]) -> list[str]:
     if not plan:
         return []
@@ -588,12 +642,12 @@ def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any])
         "### 今日の目標とトレーニング補給",
         "|区分|P(g)|F(g)|C(g)|kcal|",
         "|---|---:|---:|---:|---:|",
-        f"|今日の目標|{t['p']}|{t['f']}|{t['c']}|{fmt_num(t['kcal'])}|",
+        f"|🎯**今日の目標**|**{t['p']}**|**{t['f']}**|**{t['c']}**|**{fmt_num(t['kcal'])}**|",
     ]
     if supply is None:
-        lines.append("|トレーニング補給（摂取済み）|（添付画像の値）|（添付画像の値）|（添付画像の値）|（添付画像の値）|")
+        lines.append("|⚡補給（済）|（画像の値）|（画像の値）|（画像の値）|（画像の値）|")
     else:
-        lines.append(f"|トレーニング補給（摂取済み）|{fmt_num(supply['p'])}|{fmt_num(supply['f'])}|{fmt_num(supply['c'])}|{fmt_num(supply['kcal'])}|")
+        lines.append(f"|⚡補給（済）|{fmt_num(supply['p'])}|{fmt_num(supply['f'])}|{fmt_num(supply['c'])}|{fmt_num(supply['kcal'])}|")
     lines += [
         "",
         fueling_basis_line(manual),
@@ -643,16 +697,16 @@ def markdown_nutrition_plan(plan: dict[str, Any] | None, manual: dict[str, Any])
     ]
     if supply is None:
         lines += [
-            "|朝（ライド後）|画像から計算|-|-|-|",
-            "|昼|画像から計算|-|-|-|",
-            "|夕|画像から計算|-|-|-|",
-            "|**合計**|-|-|-|-|",
+            "|🌅朝|画像から計算|-|-|-|",
+            "|☀️昼|画像から計算|-|-|-|",
+            "|🌙夕|画像から計算|-|-|-|",
+            "|🍽**合計**|-|-|-|-|",
         ]
     else:
         for name, meal in plan["meals"].items():
-            lines.append(f"|{name}|{meal['p']}|{meal['f']}|{meal['c']}|{fmt_num(meal['kcal'])}|")
+            lines.append(f"|{MEAL_ICONS.get(name, '')}{name.replace('（ライド後）', '')}|{meal['p']}|{meal['f']}|{meal['c']}|{fmt_num(meal['kcal'])}|")
         r = plan["remaining"]
-        lines.append(f"|**合計**|**{r['p']}**|**{r['f']}**|**{r['c']}**|**{fmt_num(r['kcal'])}**|")
+        lines.append(f"|🍽**合計**|**{r['p']}**|**{r['f']}**|**{r['c']}**|**{fmt_num(r['kcal'])}**|")
     return lines
 
 
@@ -1147,6 +1201,7 @@ def render_context(context: dict[str, Any]) -> None:
         st.caption("Stravaに自己分析を書き込みました：" + str(strava_log.get("text")))
     elif strava_log.get("text"):
         st.warning(str(strava_log.get("text")))
+    render_ride_chart(context.get("ride_chart"))
     review_lines = weekly_review.markdown_review(context.get("weekly_review"))
     if review_lines:
         st.markdown("\n".join(review_lines).replace("## ", "#### ", 1))
@@ -2530,18 +2585,21 @@ def build_chatgpt_prompt() -> str:
         "- W′関連値はモデル推定として扱い、実測値のように断定しないでください。\n"
         "- CPは入力基準値であり、条件やポジションにより実効値が異なる可能性があります。\n"
         "- 医療・診断ではなく、トレーニング上の示唆に限定してください。\n"
-        "- 表と短い箇条書きを使い、要点を短く伝えてください。\n\n"
+        "- 表と短い箇条書きを使い、要点を短く伝えてください。\n"
+        "- 読むのは朝の出勤前のiPhoneです。列の多い表は横に詰まって読みにくいので、指定がない限り表は4列以内にしてください。\n"
+        "- デカップリング（Pa:HR）は、プラス＝後半に心拍が上がった（悪化）、マイナス＝後半のほうが効率が良い、として評価してください。\n"
+        "- 指標別評価は表にせず、1指標1行の箇条書きで「🟢 **指標名** 値 — 評価（20文字以内）」の形にしてください。🟢＝良い、🟡＝普通・要注意、🔴＝悪い。🟢→🟡→🔴の順に並べ、同じ色はまとめてください。\n\n"
         "栄養ルール:\n"
         "- 「今日の栄養」はツールが計算済みです。「今日の目標設定」の4行、2つの表、※の行を、数値・列・行を一切変えずに転記してください。再計算しないでください。\n"
         "- 表の後に「食べ方の例（量は目安）」を、朝・昼・夕1行ずつ、各食の数値に合う内容で書いてください。間食は作らないでください。\n"
         "- 最後に、明日のトレーニングに向けた炭水化物の考え方を1〜2行で書いてください。\n"
         "- カロミルのスクリーンショットが添付された日で、画像の値と表の補給値が違えば、その違いを指摘するだけにしてください。\n"
-        "- 補給が「カロミル写真」の日だけは例外です。トレーニング補給の行を画像のkcal・P・F・Cで埋め、残り＝今日の目標−補給（整数に丸め、0未満は0）を、次のルールで朝昼夕に分けてください：Pは朝・昼が残り÷3を5g単位、夕は残り／Fは朝が残り×25%を5g単位、昼が(残り−朝)÷2を5g単位、夕は残り／Cは※計算の行のC配分で朝・昼を5g単位、夕は残り／各食kcal＝P×4+F×9+C×4を10kcal単位、夕kcalは残りkcal−朝−昼。画像がない場合は推定せず、画像を求めてください。\n\n"
+        "- 補給が「カロミル写真」の日だけは例外です。「⚡補給（済）」の行を画像のkcal・P・F・Cで埋め、残り＝今日の目標−補給（整数に丸め、0未満は0）を、次のルールで朝昼夕に分けてください：Pは朝・昼が残り÷3を5g単位、夕は残り／Fは朝が残り×25%を5g単位、昼が(残り−朝)÷2を5g単位、夕は残り／Cは※計算の行のC配分で朝・昼を5g単位、夕は残り／各食kcal＝P×4+F×9+C×4を10kcal単位、夕kcalは残りkcal−朝−昼。画像がない場合は推定せず、画像を求めてください。\n\n"
         "出力順:\n"
         "1. 結論\n"
         "2. セッション構造\n"
         "3. 主要区間表\n"
-        "4. 指標別評価\n"
+        "4. 指標別評価（🟢🟡🔴の箇条書き）\n"
         "5. 良かった点\n"
         "6. 改善点\n"
         "7. 次回提案\n"
