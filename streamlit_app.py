@@ -27,7 +27,7 @@ from services import insights
 
 load_dotenv()
 
-APP_VERSION = "2026-11-27-claude-strava-once-v69"
+APP_VERSION = "2026-11-27-claude-zwiftchart-v70"
 
 FUELING_SETS = {
     "高強度": (
@@ -1945,7 +1945,10 @@ def build_review_markdown(context: dict[str, Any]) -> str:
         "",
         *context.get("same_menu_lines", []),
         *([""] if context.get("same_menu_lines") else []),
-        *insights.markdown_chart_data(context.get("ride_chart")),
+        *insights.markdown_chart_data(
+            context.get("ride_chart"),
+            to_float(metrics.get("ftp")) or to_float(athlete_inputs.get("critical_power_w")),
+        ),
         *([""] if context.get("ride_chart") else []),
         "## Intervals.icu コンディション",
         "|項目|値|",
@@ -2586,7 +2589,7 @@ def build_chatgpt_prompt() -> str:
         "3. 次回提案\n"
         "4. 指標別評価（🟢🟡🔴の箇条書き）\n"
         "5. 良かった点・改善点（各2〜3個の箇条書き）\n"
-        "6. セッション構造と主要区間：最初にセッションの流れを1〜2行（例：アップ10分 → SST 55分 → ダウン5分）。続けて主要区間を表にせず、区間ごとに「**A1** 10〜65分（55分）」の見出し行と「232W / NP 235W（CP比0.90）｜HR 152｜EF 1.53｜Dec +6.5%｜W′残 60%」の1〜2行で書く。「グラフ用データ」がある日は、そのデータでパワー・心拍（W′balがあればそれも）の折れ線グラフを描き、主要区間を分かるようにする（グラフを描けない環境なら省略）。\n"
+        "6. セッション構造と主要区間：最初にセッションの流れを1〜2行（例：アップ10分 → SST 55分 → ダウン5分）。続けて主要区間を表にせず、区間ごとに「**A1** 10〜65分（55分）」の見出し行と「232W / NP 235W（CP比0.90）｜HR 152｜EF 1.53｜Dec +6.5%｜W′残 60%」の1〜2行で書く。「グラフ用データ」がある日は、Zwiftのライドレポート風のグラフを1つ描く：背景は濃いグレー（#2B2B2B）、パワーは1分ごとの縦棒でゾーン列の色（データに書いた色）で塗り、棒の隙間なし、心拍は赤い細線（#E02020）で右軸、W′balがあれば水色の細線（#7FD3FF）、最大パワーと最大心拍に小さな数値ラベル、主要区間の範囲は上部に細い帯で示す。グラフを描けない環境なら省略する。\n"
         "7. 前回の同じメニューとの比較（「前回の同じメニューとの比較」の表がある日だけ。EF・デカップリング・心拍の変化から、有酸素の伸びを1〜2行で）\n"
         "8. 目標進捗（目標進捗の表と「富士ヒル予想タイム」をもとに、目標までの距離と今日のセッションの位置づけを2〜3行で。予想タイムはツールの値をそのまま使い、再計算しない）\n"
         "9. 判断できないこと・追加で必要な情報（1つにまとめ、特になければこの項目ごと省略）\n"

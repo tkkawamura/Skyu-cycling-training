@@ -138,7 +138,25 @@ def markdown_same_menu(latest: dict[str, Any] | None, activities: list[dict[str,
 
 
 # --- Chart data for Claude ---------------------------------------------------
-def markdown_chart_data(chart: dict[str, Any] | None) -> list[str]:
+# Zwift power zones (% of FTP) and their colors.
+ZWIFT_ZONES = [
+    (0.60, "Z1", "#7F7F7F"),
+    (0.76, "Z2", "#338CFF"),
+    (0.90, "Z3", "#59BF59"),
+    (1.05, "Z4", "#FFCC3F"),
+    (1.19, "Z5", "#FF6639"),
+    (99.0, "Z6", "#FF330C"),
+]
+
+
+def zwift_zone(power: float | None, ftp: float | None) -> str:
+    if power is None or not ftp:
+        return ""
+    ratio = power / ftp
+    return next(name for limit, name, _ in ZWIFT_ZONES if ratio < limit)
+
+
+def markdown_chart_data(chart: dict[str, Any] | None, ftp: float | None = None) -> list[str]:
     points = (chart or {}).get("points") or []
     if not points:
         return []
@@ -149,13 +167,15 @@ def markdown_chart_data(chart: dict[str, Any] | None) -> list[str]:
             if point.get(key) is not None:
                 bucket[key].append(point[key])
     has_wbal = bool(chart.get("has_wbal"))
-    header = "分,W,bpm" + (",Wbal%" if has_wbal else "")
+    header = "分,W,ゾーン,bpm" + (",Wbal%" if has_wbal else "")
     rows = [header]
     for minute in sorted(minutes):
         b = minutes[minute]
+        power = sum(b["power"]) / len(b["power"]) if b["power"] else None
         row = [
             str(minute),
-            f"{sum(b['power']) / len(b['power']):.0f}" if b["power"] else "",
+            f"{power:.0f}" if power is not None else "",
+            zwift_zone(power, ftp),
             f"{sum(b['hr']) / len(b['hr']):.0f}" if b["hr"] else "",
         ]
         if has_wbal:
@@ -164,9 +184,11 @@ def markdown_chart_data(chart: dict[str, Any] | None) -> list[str]:
     segs = "、".join(
         f"{seg['id']} {seg['start']:.0f}〜{seg['end']:.0f}分" for seg in (chart.get("segments") or []) if seg.get("id")
     )
+    colors = "、".join(f"{name}={color}" for _, name, color in ZWIFT_ZONES)
     return [
         "## グラフ用データ（FIT・1分平均）",
         f"- 主要区間：{segs or '-'}",
+        f"- ゾーンはFTP{ftp:.0f}W基準のZwiftパワーゾーン。色：{colors}" if ftp else "- ゾーン：FTP不明",
         "```csv",
         *rows,
         "```",
