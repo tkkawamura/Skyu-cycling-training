@@ -27,7 +27,7 @@ from services import insights
 
 load_dotenv()
 
-APP_VERSION = "2026-11-27-claude-report7-v67"
+APP_VERSION = "2026-11-27-claude-chartfix-v68"
 
 FUELING_SETS = {
     "高強度": (
@@ -1206,7 +1206,10 @@ def render_context(context: dict[str, Any]) -> None:
         st.caption("Stravaに自己分析を書き込みました：" + str(strava_log.get("text")))
     elif strava_log.get("text"):
         st.warning(str(strava_log.get("text")))
-    render_ride_chart(context.get("ride_chart"))
+    try:
+        render_ride_chart(context.get("ride_chart"))
+    except Exception as exc:  # a chart problem must never break the report
+        st.caption(f"グラフを表示できませんでした（{type(exc).__name__}）")
     review_lines = weekly_review.markdown_review(context.get("weekly_review"))
     if review_lines:
         st.markdown("\n".join(review_lines).replace("## ", "#### ", 1))
